@@ -16,10 +16,10 @@ import { formatGhs } from "./lib/pos-client";
 import {
   InventoryScreen,
   MenuScreen,
-  OrdersScreen,
   SettingsScreen,
   TablesScreen,
 } from "./screens/placeholders";
+import { OrdersScreen } from "./screens/orders/orders-screen";
 
 const client = getPosClient();
 
@@ -193,6 +193,15 @@ export function App() {
       );
     }
   }
+  function startNewOrder() {
+    setOrder(null);
+    setOrderType("dine_in");
+    setTableId(null);
+    setCategory("All");
+    setNotice(null);
+    setError(null);
+    setActiveScreen("POS");
+  }
   async function savePrinter(input: Parameters<PosClient["savePrinter"]>[0]) {
     setError(null);
     const saved = await client.savePrinter(input);
@@ -272,6 +281,7 @@ export function App() {
           <OrdersScreen
             orders={bootstrap?.openOrders ?? []}
             onOpenOrder={openOrder}
+            onNewOrder={startNewOrder}
           />
         )}
         {activeScreen === "Tables" && (

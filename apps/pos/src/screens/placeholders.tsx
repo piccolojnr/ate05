@@ -3,11 +3,9 @@ import { Badge, Button, Card } from "@ate05/ui";
 import { PageHeader } from "../components/page-header";
 import { StatusBadge } from "../components/status-badge";
 import {
-  formatGhs,
   type InventoryItem,
   type InventoryUnit,
   type StockMovement,
-  type OpenOrder,
   type RestaurantTable,
   type PosPrinterConfig,
 } from "../lib/pos-client";
@@ -27,53 +25,6 @@ function ScreenHeader({
       description={description}
       action={action ? <Button>{action}</Button> : undefined}
     />
-  );
-}
-
-export function OrdersScreen({
-  orders,
-  onOpenOrder,
-}: {
-  orders: OpenOrder[];
-  onOpenOrder: (order: OpenOrder) => void;
-}) {
-  return (
-    <div className="space-y-6">
-      <ScreenHeader
-        title="Orders"
-        description="Track open and completed orders across the restaurant."
-        action="New order"
-      />
-      <Card className="overflow-hidden">
-        <div className="grid grid-cols-[1fr_1.5fr_1fr_1fr] gap-4 border-b bg-muted/50 px-5 py-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-          <span>Order</span>
-          <span>Guest</span>
-          <span>Status</span>
-          <span className="text-right">Total</span>
-        </div>
-        {orders.map((order) => (
-          <button
-            type="button"
-            key={order.id}
-            className="grid w-full grid-cols-[1fr_1.5fr_1fr_1fr] gap-4 border-b px-5 py-4 text-left transition-colors last:border-0 hover:bg-muted/40"
-            onClick={() => onOpenOrder(order)}
-          >
-            <span className="font-black">
-              #{String(order.orderNumber).padStart(4, "0")}
-            </span>
-            <span className="text-sm text-muted-foreground">
-              {order.tableName ?? "Takeaway"}
-            </span>
-            <span>
-              <StatusBadge kind="order" value={order.status} />
-            </span>
-            <span className="text-right font-bold">
-              {formatGhs(order.totalMinor)}
-            </span>
-          </button>
-        ))}
-      </Card>
-    </div>
   );
 }
 

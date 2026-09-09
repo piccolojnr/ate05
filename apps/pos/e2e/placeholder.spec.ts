@@ -28,7 +28,7 @@ test("cashier can create, persist, and reopen a local order", async ({
   await expect(page.getByLabel("Current order")).toContainText("Ticket #2");
   await page.getByRole("button", { name: "Orders" }).click();
   await expect(page.getByRole("heading", { name: "Orders" })).toBeVisible();
-  await page.getByRole("button", { name: /#0001/ }).click();
+  await page.getByRole("button", { name: "Open Order" }).first().click();
   await expect(page.getByLabel("Note for Fried Rice")).toHaveValue("No pepper");
   await expect(page.getByLabel("Current order")).toContainText("Ticket #1");
   await expect(page.getByLabel("Current order")).toContainText("Ticket #2");
@@ -44,7 +44,7 @@ test("cashier can create, persist, and reopen a local order", async ({
   await expect(page.getByRole("status")).toContainText("Receipt reprinted");
   await page.reload();
   await page.getByRole("button", { name: "Orders" }).click();
-  await page.getByRole("button", { name: /#0001/ }).click();
+  await page.getByRole("button", { name: "Open Order" }).first().click();
   await expect(page.getByLabel("Current order")).toContainText("GHS 135.00");
 });
 
