@@ -76,6 +76,7 @@ export interface PosClient {
     itemId: string,
     notes: string,
   ): Promise<PosOrder>;
+  removeOrderItem(orderId: string, itemId: string): Promise<PosOrder>;
 }
 
 export function formatGhs(minor: number): string {

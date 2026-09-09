@@ -202,5 +202,19 @@ export function createBrowserPreviewClient(): PosClient {
       writeState(state);
       return order;
     },
+    async removeOrderItem(orderId, itemId) {
+      const state = readState();
+      const order = state.orders.find((entry) => entry.id === orderId);
+      if (!order) throw new Error("Order not found.");
+      const updated = refreshOrder({
+        ...order,
+        items: order.items.filter((item) => item.id !== itemId),
+      });
+      state.orders = state.orders.map((entry) =>
+        entry.id === orderId ? updated : entry,
+      );
+      writeState(state);
+      return updated;
+    },
   };
 }

@@ -60,7 +60,11 @@ See [`packages/database/README.md`](packages/database/README.md) for numbering, 
 
 ## POS persistence boundary
 
-Operational writes live in `packages/database` as a focused SQLite POS service; React never imports `better-sqlite3` or issues SQL. The desktop renderer calls the typed Tauri client (`apps/pos/src/lib/tauri-client.ts`), which is the explicit place for native command bindings. The normal browser/Vite preview uses a clearly separated local-storage preview adapter so UI development and Playwright can run without a native runtime; it is not the production persistence implementation.
+Operational writes live in `packages/database` as a focused SQLite POS service; React never imports `better-sqlite3`. The desktop renderer selects the native-only typed Tauri client (`apps/pos/src/lib/tauri-client.ts`), which uses the official Tauri SQL plugin with fixed, parameterized operational queries. It shares `packages/domain` money/total helpers and never accepts SQL from React. The normal browser/Vite preview uses a clearly separated local-storage preview adapter so UI development and Playwright can run without a native runtime; it is not the production persistence implementation and is never selected when Tauri is present.
+
+On desktop, `ate05.db` is created below Tauri's OS-specific application data directory (the plugin's supported SQLite base directory), alongside `backups/` and `logs/`. The registered Rust migration runs idempotently before the connection is used. Startup only ensures the ATE05 business and local owner bootstrap records; it never resets or production-seeds data. Development-mode native startup adds the existing demo data only when the local menu is empty.
+
+Native Linux validation additionally needs the Tauri prerequisites `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`, and the related GTK system libraries. The repository includes the Rust/plugin wiring, but those administrator-owned packages must be installed on the development machine before `cargo check` or `tauri dev` can complete.
 
 The SQLite service itself is initialized with `initializeDatabase`, then explicitly seeded with `seedDevelopmentData` for local development/tests. This keeps production startup from silently adding demo records.
 

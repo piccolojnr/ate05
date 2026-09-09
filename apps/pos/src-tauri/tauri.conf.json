@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
   },
   "app": {
@@ -20,6 +20,11 @@
       }
     ],
     "security": { "csp": null }
+  },
+  "plugins": {
+    "sql": {
+      "preload": ["sqlite:ate05.db"]
+    }
   },
   "bundle": { "active": true, "targets": "all" }
 }
