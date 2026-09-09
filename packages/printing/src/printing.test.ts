@@ -4,6 +4,7 @@ import {
   encodeEscPos,
   formatKitchenTicket,
   formatPrinterTest,
+  formatReceipt,
 } from ".";
 
 const ticket = {
@@ -30,6 +31,59 @@ const ticket = {
 };
 
 describe("kitchen ticket printing", () => {
+  it("formats a historical customer receipt with split payments", () => {
+    const output = formatReceipt({
+      businessName: "ATE05",
+      receiptNumber: 381,
+      orderNumber: 142,
+      issuedAt: "2026-09-09T20:15:00.000Z",
+      tableName: "Table 4",
+      items: [
+        {
+          name: "Fried Rice",
+          quantity: 2,
+          unitPriceMinor: 5000,
+          lineTotalMinor: 10000,
+        },
+      ],
+      subtotalMinor: 10000,
+      totalMinor: 10000,
+      payments: [
+        { method: "cash", amountMinor: 5000 },
+        { method: "mobile_money", amountMinor: 5000 },
+      ],
+    });
+    expect(output).toContain("CUSTOMER RECEIPT");
+    expect(output).toContain("Mobile Money");
+    expect(output).toContain("PAID");
+    expect(output.split("\n").every((line) => line.length <= 48)).toBe(true);
+  });
+
+  it("keeps receipt lines within 58mm width", () => {
+    const output = formatReceipt(
+      {
+        businessName: "ATE05",
+        receiptNumber: 1,
+        orderNumber: 1,
+        issuedAt: "2026-09-09T20:15:00.000Z",
+        tableName: null,
+        items: [
+          {
+            name: "A very long item name that should fit",
+            quantity: 1,
+            unitPriceMinor: 100,
+            lineTotalMinor: 100,
+          },
+        ],
+        subtotalMinor: 100,
+        totalMinor: 100,
+        payments: [{ method: "card", amountMinor: 100 }],
+      },
+      58,
+    );
+    expect(output.split("\n").every((line) => line.length <= 32)).toBe(true);
+  });
+
   it("formats initial, addition, and cancellation tickets without prices", () => {
     expect(formatKitchenTicket(ticket)).toContain("INITIAL");
     expect(formatKitchenTicket({ ...ticket, type: "addition" })).toContain(

@@ -32,10 +32,20 @@ test("cashier can create, persist, and reopen a local order", async ({
   await expect(page.getByLabel("Note for Fried Rice")).toHaveValue("No pepper");
   await expect(page.getByLabel("Current order")).toContainText("Ticket #1");
   await expect(page.getByLabel("Current order")).toContainText("Ticket #2");
+  await expect(page.getByLabel("Current order")).toContainText(
+    "GHS 135.00 due",
+  );
+  await page.getByRole("button", { name: "Confirm Payment" }).click();
+  await expect(page.getByLabel("Current order")).toContainText("PAID");
+  await expect(page.getByLabel("Current order")).toContainText(
+    "Receipt #000001",
+  );
+  await page.getByRole("button", { name: "Reprint Receipt" }).click();
+  await expect(page.getByRole("status")).toContainText("Receipt reprinted");
   await page.reload();
   await page.getByRole("button", { name: "Orders" }).click();
   await page.getByRole("button", { name: /#0001/ }).click();
-  await expect(page.getByLabel("Current order")).toContainText("GHS 100.00");
+  await expect(page.getByLabel("Current order")).toContainText("GHS 135.00");
 });
 
 test("renders local seating data", async ({ page }) => {

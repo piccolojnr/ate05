@@ -25,6 +25,9 @@ export const payments = sqliteTable(
     method: text("method").notNull(),
     status: text("status").notNull().default("recorded"),
     reference: text("reference"),
+    cashTenderedMinor: integer("cash_tendered_minor"),
+    changeMinor: integer("change_minor"),
+    idempotencyKey: text("idempotency_key"),
     receivedBy: text("received_by").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -35,6 +38,10 @@ export const payments = sqliteTable(
   (table) => [
     index("payments_business_id_idx").on(table.businessId),
     index("payments_order_received_at_idx").on(table.orderId, table.receivedAt),
+    uniqueIndex("payments_business_id_idempotency_unique").on(
+      table.businessId,
+      table.idempotencyKey,
+    ),
     check("payments_amount_positive", sql`${table.amountMinor} > 0`),
     check(
       "payments_method_check",
@@ -60,6 +67,12 @@ export const receipts = sqliteTable(
     receiptNumber: integer("receipt_number").notNull(),
     totalMinor: integer("total_minor").notNull(),
     paymentSummary: text("payment_summary").notNull(),
+    snapshot: text("snapshot").notNull(),
+    printStatus: text("print_status").notNull().default("pending"),
+    printedAt: text("printed_at"),
+    lastPrintError: text("last_print_error"),
+    printAttemptCount: integer("print_attempt_count").notNull().default(0),
+    lastAttemptAt: text("last_attempt_at"),
     issuedAt: text("issued_at").notNull(),
     issuedBy: text("issued_by").references(() => users.id, {
       onDelete: "set null",
@@ -74,5 +87,9 @@ export const receipts = sqliteTable(
     ),
     check("receipts_number_positive", sql`${table.receiptNumber} > 0`),
     check("receipts_total_nonnegative", sql`${table.totalMinor} >= 0`),
+    check(
+      "receipts_print_status_check",
+      sql`${table.printStatus} in ('pending', 'printed', 'failed')`,
+    ),
   ],
 );

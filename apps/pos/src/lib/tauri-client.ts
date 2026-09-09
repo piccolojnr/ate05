@@ -13,6 +13,8 @@ import type {
   PosBootstrap,
   PosClient,
   PosOrder,
+  PosPayment,
+  PosReceipt,
   PosPrinterConfig,
 } from "./pos-client";
 import type { PaperWidth } from "@ate05/printing";
@@ -169,10 +171,45 @@ function mapOrder(row: Row, items: PosOrder["items"]): PosOrder {
     paymentStatus: asString(row.paymentStatus),
     subtotalMinor: asNumber(row.subtotalMinor),
     totalMinor: asNumber(row.totalMinor),
+    amountPaidMinor: asNumber(row.amountPaidMinor),
+    amountDueMinor: Math.max(
+      0,
+      asNumber(row.totalMinor) - asNumber(row.amountPaidMinor),
+    ),
+    receipt: null,
     openedAt: asString(row.openedAt),
     items,
     kitchenTickets: [],
     kitchenChangesPending: false,
+  };
+}
+
+function mapPayment(row: Row): PosPayment {
+  return {
+    id: asString(row.id),
+    amountMinor: asNumber(row.amountMinor),
+    method: asString(row.method) as PosPayment["method"],
+    reference: asNullableString(row.reference),
+    cashTenderedMinor:
+      row.cashTenderedMinor == null ? null : asNumber(row.cashTenderedMinor),
+    changeMinor: row.changeMinor == null ? null : asNumber(row.changeMinor),
+  };
+}
+
+function mapReceipt(
+  row: Row,
+  snapshot: { items?: PosOrder["items"]; payments?: PosPayment[] },
+): PosReceipt {
+  return {
+    id: asString(row.id),
+    receiptNumber: asNumber(row.receiptNumber),
+    totalMinor: asNumber(row.totalMinor),
+    issuedAt: asString(row.issuedAt),
+    printStatus: asString(row.printStatus) as PosReceipt["printStatus"],
+    printedAt: asNullableString(row.printedAt),
+    lastPrintError: asNullableString(row.lastPrintError),
+    items: snapshot.items ?? [],
+    payments: snapshot.payments ?? [],
   };
 }
 async function getKitchenTickets(
@@ -236,6 +273,17 @@ async function getActiveKitchenPrinter(
   const [row] = await select<Row>(
     db,
     "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'kitchen' AND active = 1 ORDER BY created_at LIMIT 1",
+    [businessId],
+  );
+  return row ? mapPrinter(row) : null;
+}
+
+async function getActiveReceiptPrinter(
+  db: SqlDatabase,
+): Promise<PosPrinterConfig | null> {
+  const [row] = await select<Row>(
+    db,
+    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'receipt' AND active = 1 ORDER BY updated_at DESC LIMIT 1",
     [businessId],
   );
   return row ? mapPrinter(row) : null;
@@ -318,6 +366,69 @@ async function attemptKitchenPrint(
     );
   }
 }
+
+async function attemptReceiptPrint(
+  db: SqlDatabase,
+  receipt: PosReceipt,
+  order: PosOrder,
+  printer: PosPrinterConfig | null,
+  reprint = false,
+): Promise<void> {
+  const attemptedAt = timestamp();
+  await execute(
+    db,
+    reprint
+      ? "UPDATE receipts SET print_attempt_count = print_attempt_count + 1, last_attempt_at = $1 WHERE id = $2 AND business_id = $3"
+      : "UPDATE receipts SET print_status = 'pending', print_attempt_count = print_attempt_count + 1, last_attempt_at = $1, last_print_error = NULL WHERE id = $2 AND business_id = $3",
+    [attemptedAt, receipt.id, businessId],
+  );
+  const failure = async (message: string) =>
+    execute(
+      db,
+      reprint
+        ? "UPDATE receipts SET last_print_error = $1 WHERE id = $2 AND business_id = $3"
+        : "UPDATE receipts SET print_status = 'failed', last_print_error = $1 WHERE id = $2 AND business_id = $3",
+      [message, receipt.id, businessId],
+    );
+  if (!printer) {
+    await failure("No active receipt printer is configured.");
+    return;
+  }
+  try {
+    await invoke("print_receipt", {
+      request: nativePrinterRequest(printer),
+      receipt: {
+        businessName: "ATE05",
+        receiptNumber: receipt.receiptNumber,
+        orderNumber: order.orderNumber,
+        issuedAt: receipt.issuedAt,
+        tableName: order.tableName,
+        items: receipt.items.map((item) => ({
+          name: item.name,
+          quantity: item.quantity,
+          lineTotalMinor: item.lineTotalMinor,
+        })),
+        subtotalMinor: order.subtotalMinor,
+        totalMinor: receipt.totalMinor,
+        payments: receipt.payments.map((payment) => ({
+          method: payment.method,
+          amountMinor: payment.amountMinor,
+        })),
+      },
+    });
+    await execute(
+      db,
+      reprint
+        ? "UPDATE receipts SET last_print_error = NULL WHERE id = $1 AND business_id = $2"
+        : "UPDATE receipts SET print_status = 'printed', printed_at = $1, last_print_error = NULL WHERE id = $2 AND business_id = $3",
+      reprint
+        ? [receipt.id, businessId]
+        : [attemptedAt, receipt.id, businessId],
+    );
+  } catch (cause) {
+    await failure(String(cause).slice(0, 500));
+  }
+}
 async function getKitchenSyncLines(
   db: SqlDatabase,
   orderId: string,
@@ -379,7 +490,7 @@ async function getKitchenSyncLines(
 async function getOrder(db: SqlDatabase, orderId: string): Promise<PosOrder> {
   const [order] = await select<Row>(
     db,
-    "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.id = $1 AND o.business_id = $2",
+    "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt, COALESCE((SELECT SUM(p.amount_minor) FROM payments p WHERE p.order_id = o.id AND p.business_id = o.business_id AND p.status = 'recorded'), 0) AS amountPaidMinor FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.id = $1 AND o.business_id = $2",
     [orderId, businessId],
   );
   if (!order) throw new PosClientError("not_found", "Order not found.");
@@ -406,6 +517,20 @@ async function getOrder(db: SqlDatabase, orderId: string): Promise<PosOrder> {
       await getKitchenSyncLines(db, orderId),
       orderResult.kitchenTickets.length > 0,
     ).length > 0;
+  const [receipt] = await select<Row>(
+    db,
+    "SELECT id, receipt_number AS receiptNumber, total_minor AS totalMinor, issued_at AS issuedAt, print_status AS printStatus, printed_at AS printedAt, last_print_error AS lastPrintError, snapshot FROM receipts WHERE order_id = $1 AND business_id = $2",
+    [orderId, businessId],
+  );
+  if (receipt) {
+    let snapshot: { items?: PosOrder["items"]; payments?: PosPayment[] } = {};
+    try {
+      snapshot = JSON.parse(asString(receipt.snapshot)) as typeof snapshot;
+    } catch {
+      snapshot = {};
+    }
+    orderResult.receipt = mapReceipt(receipt, snapshot);
+  }
   return orderResult;
 }
 async function recalculateTotals(
@@ -453,7 +578,7 @@ export function createTauriClient(): PosClient {
       );
       const openOrders = await select<Row>(
         db,
-        "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = $1 AND o.status IN ('open', 'sent_to_kitchen', 'preparing') ORDER BY o.opened_at DESC, o.order_number DESC",
+        "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt, COALESCE((SELECT SUM(p.amount_minor) FROM payments p WHERE p.order_id = o.id AND p.business_id = o.business_id AND p.status = 'recorded'), 0) AS amountPaidMinor FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = $1 AND o.status IN ('open', 'sent_to_kitchen', 'preparing', 'completed') ORDER BY o.opened_at DESC, o.order_number DESC",
         [businessId],
       );
       return {
@@ -790,11 +915,12 @@ export function createTauriClient(): PosClient {
       const now = timestamp();
       await execute(
         db,
-        "INSERT INTO printers (id, business_id, name, role, connection_type, address, port, paper_width, cutter_enabled, active, created_at, updated_at) VALUES ($1, $2, $3, 'kitchen', $4, $5, $6, $7, $8, $9, $10, $10) ON CONFLICT(id) DO UPDATE SET name = excluded.name, connection_type = excluded.connection_type, address = excluded.address, port = excluded.port, paper_width = excluded.paper_width, cutter_enabled = excluded.cutter_enabled, active = excluded.active, updated_at = excluded.updated_at WHERE printers.business_id = excluded.business_id",
+        "INSERT INTO printers (id, business_id, name, role, connection_type, address, port, paper_width, cutter_enabled, active, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11) ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, connection_type = excluded.connection_type, address = excluded.address, port = excluded.port, paper_width = excluded.paper_width, cutter_enabled = excluded.cutter_enabled, active = excluded.active, updated_at = excluded.updated_at WHERE printers.business_id = excluded.business_id",
         [
           id,
           businessId,
           input.name.trim(),
+          input.role ?? "kitchen",
           input.connectionType,
           input.address.trim(),
           input.port,
@@ -858,6 +984,219 @@ export function createTauriClient(): PosClient {
         throw new PosClientError("not_found", "Kitchen ticket not found.");
       const printer = await getActiveKitchenPrinter(db);
       await attemptKitchenPrint(db, order, ticket, printer, true);
+    },
+    async recordPayment(input) {
+      if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
+        throw new PosClientError(
+          "validation",
+          "Payment amount must be positive.",
+        );
+      if (!input.idempotencyKey)
+        throw new PosClientError(
+          "validation",
+          "Payment submission is missing its operation key.",
+        );
+      const db = await database();
+      await execute(db, "BEGIN IMMEDIATE");
+      let receiptCreated = false;
+      try {
+        const [duplicate] = await select<Row>(
+          db,
+          "SELECT id FROM payments WHERE business_id = $1 AND idempotency_key = $2",
+          [businessId, input.idempotencyKey],
+        );
+        if (duplicate) {
+          await execute(db, "COMMIT");
+          return getOrder(db, input.orderId);
+        }
+        const [orderRow] = await select<Row>(
+          db,
+          "SELECT id, order_number AS orderNumber, order_type AS orderType, table_id AS tableId, status, subtotal_minor AS subtotalMinor, total_minor AS totalMinor FROM orders WHERE id = $1 AND business_id = $2",
+          [input.orderId, businessId],
+        );
+        if (!orderRow)
+          throw new PosClientError("not_found", "Order not found.");
+        const [paidRow] = await select<Row>(
+          db,
+          "SELECT COALESCE(SUM(amount_minor), 0) AS amountPaidMinor FROM payments WHERE order_id = $1 AND business_id = $2 AND status = 'recorded'",
+          [input.orderId, businessId],
+        );
+        const due = Math.max(
+          0,
+          asNumber(orderRow.totalMinor) - asNumber(paidRow?.amountPaidMinor),
+        );
+        if (due <= 0)
+          throw new PosClientError(
+            "invalid_state",
+            "This order is already paid.",
+          );
+        if (input.amountMinor > due)
+          throw new PosClientError(
+            "validation",
+            "Payment cannot exceed the amount due.",
+          );
+        const tendered =
+          input.method === "cash"
+            ? (input.cashTenderedMinor ?? input.amountMinor)
+            : null;
+        if (
+          tendered !== null &&
+          (!Number.isSafeInteger(tendered) || tendered < input.amountMinor)
+        )
+          throw new PosClientError(
+            "validation",
+            "Cash tendered must cover the payment.",
+          );
+        const change = tendered === null ? null : tendered - input.amountMinor;
+        const now = timestamp();
+        await execute(
+          db,
+          "INSERT INTO payments (id, business_id, order_id, amount_minor, method, status, reference, cash_tendered_minor, change_minor, idempotency_key, received_by, received_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, 'recorded', $6, $7, $8, $9, $10, $11, $11, $11)",
+          [
+            crypto.randomUUID(),
+            businessId,
+            input.orderId,
+            input.amountMinor,
+            input.method,
+            input.reference?.trim() || null,
+            tendered,
+            change,
+            input.idempotencyKey,
+            createdBy,
+            now,
+          ],
+        );
+        const nextPaid = asNumber(paidRow?.amountPaidMinor) + input.amountMinor;
+        const nextStatus =
+          nextPaid === asNumber(orderRow.totalMinor)
+            ? "paid"
+            : "partially_paid";
+        await execute(
+          db,
+          "UPDATE orders SET payment_status = $1, status = CASE WHEN $1 = 'paid' THEN 'completed' ELSE status END, updated_at = $2 WHERE id = $3 AND business_id = $4",
+          [nextStatus, now, input.orderId, businessId],
+        );
+        if (nextStatus === "paid") {
+          const [existingReceipt] = await select<Row>(
+            db,
+            "SELECT id FROM receipts WHERE order_id = $1 AND business_id = $2",
+            [input.orderId, businessId],
+          );
+          if (!existingReceipt) {
+            const [numberRow] = await select<Row>(
+              db,
+              "SELECT COALESCE(MAX(receipt_number), 0) + 1 AS nextNumber FROM receipts WHERE business_id = $1",
+              [businessId],
+            );
+            const itemRows = await select<Row>(
+              db,
+              "SELECT id, menu_item_id AS menuItemId, item_name_snapshot AS name, unit_price_minor_snapshot AS unitPriceMinor, quantity, line_total_minor AS lineTotalMinor, notes FROM order_items WHERE order_id = $1 ORDER BY created_at, id",
+              [input.orderId],
+            );
+            const paymentRows = await select<Row>(
+              db,
+              "SELECT id, amount_minor AS amountMinor, method, reference, cash_tendered_minor AS cashTenderedMinor, change_minor AS changeMinor FROM payments WHERE order_id = $1 AND business_id = $2 AND status = 'recorded' ORDER BY received_at, created_at",
+              [input.orderId, businessId],
+            );
+            const snapshot = {
+              items: itemRows.map((row) => ({
+                id: asString(row.id),
+                menuItemId: asNullableString(row.menuItemId),
+                name: asString(row.name),
+                unitPriceMinor: asNumber(row.unitPriceMinor),
+                quantity: asNumber(row.quantity),
+                lineTotalMinor: asNumber(row.lineTotalMinor),
+                notes: asNullableString(row.notes),
+              })),
+              payments: paymentRows.map(mapPayment),
+            };
+            await execute(
+              db,
+              "INSERT INTO receipts (id, business_id, order_id, receipt_number, total_minor, payment_summary, snapshot, print_status, issued_at, issued_by, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $8)",
+              [
+                crypto.randomUUID(),
+                businessId,
+                input.orderId,
+                asNumber(numberRow?.nextNumber),
+                asNumber(orderRow.totalMinor),
+                JSON.stringify(
+                  snapshot.payments.map((payment) => ({
+                    method: payment.method,
+                    amountMinor: payment.amountMinor,
+                  })),
+                ),
+                JSON.stringify(snapshot),
+                now,
+                createdBy,
+              ],
+            );
+            receiptCreated = true;
+          }
+        }
+        await execute(db, "COMMIT");
+      } catch (error) {
+        await execute(db, "ROLLBACK");
+        throw error;
+      }
+      const updated = await getOrder(db, input.orderId);
+      if (receiptCreated && updated.receipt) {
+        await attemptReceiptPrint(
+          db,
+          updated.receipt,
+          updated,
+          await getActiveReceiptPrinter(db),
+        );
+        return getOrder(db, input.orderId);
+      }
+      return updated;
+    },
+    async listReceipts() {
+      const db = await database();
+      const rows = await select<Row>(
+        db,
+        "SELECT id, receipt_number AS receiptNumber, total_minor AS totalMinor, issued_at AS issuedAt, print_status AS printStatus, printed_at AS printedAt, last_print_error AS lastPrintError, snapshot FROM receipts WHERE business_id = $1 ORDER BY issued_at DESC",
+        [businessId],
+      );
+      return rows.map((row) => {
+        let snapshot: { items?: PosOrder["items"]; payments?: PosPayment[] } =
+          {};
+        try {
+          snapshot = JSON.parse(asString(row.snapshot)) as typeof snapshot;
+        } catch {
+          /* legacy row */
+        }
+        return mapReceipt(row, snapshot);
+      });
+    },
+    async retryPendingReceiptPrints() {
+      const db = await database();
+      const rows = await select<Row>(
+        db,
+        "SELECT order_id AS orderId FROM receipts WHERE business_id = $1 AND print_status <> 'printed'",
+        [businessId],
+      );
+      const printer = await getActiveReceiptPrinter(db);
+      const orders: PosOrder[] = [];
+      for (const row of rows) {
+        const order = await getOrder(db, asString(row.orderId));
+        if (order.receipt)
+          await attemptReceiptPrint(db, order.receipt, order, printer);
+        orders.push(await getOrder(db, order.id));
+      }
+      return orders;
+    },
+    async reprintReceipt(orderId) {
+      const db = await database();
+      const order = await getOrder(db, orderId);
+      if (!order.receipt)
+        throw new PosClientError("not_found", "Receipt not found.");
+      await attemptReceiptPrint(
+        db,
+        order.receipt,
+        order,
+        await getActiveReceiptPrinter(db),
+        true,
+      );
     },
   };
 }

@@ -68,4 +68,5 @@ export interface Printer {
 
 export * from "./escpos";
 export * from "./formatters/kitchen-ticket";
+export * from "./formatters/receipt";
 export * from "./preview";

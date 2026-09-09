@@ -13,6 +13,7 @@ import type {
   PosOrder,
   PosPrinterConfig,
 } from "./lib/pos-client";
+import { formatGhs } from "./lib/pos-client";
 import {
   InventoryScreen,
   MenuScreen,
@@ -146,6 +147,41 @@ export function App() {
       );
     }
   }
+  async function recordPayment(
+    input: Parameters<PosClient["recordPayment"]>[0],
+  ) {
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await client.recordPayment(input);
+      setOrder(updated);
+      await refresh();
+      setNotice(
+        updated.paymentStatus === "paid"
+          ? updated.receipt?.printStatus === "printed"
+            ? "Payment recorded successfully. Receipt printed."
+            : "Payment recorded successfully. Receipt saved and can be reprinted."
+          : "Payment recorded. Remaining balance: " +
+              formatGhs(updated.amountDueMinor),
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to record payment.",
+      );
+    }
+  }
+  async function reprintReceipt() {
+    if (!order) return;
+    try {
+      await client.reprintReceipt(order.id);
+      setOrder(await client.getOrder(order.id));
+      setNotice("Receipt reprinted.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to reprint receipt.",
+      );
+    }
+  }
   async function openOrder(summary: OpenOrder) {
     try {
       setOrder(await client.getOrder(summary.id));
@@ -160,7 +196,11 @@ export function App() {
   }
   async function savePrinter(input: Parameters<PosClient["savePrinter"]>[0]) {
     setError(null);
-    setPrinters([await client.savePrinter(input)]);
+    const saved = await client.savePrinter(input);
+    setPrinters((current) => [
+      ...current.filter((printer) => printer.id !== saved.id),
+      saved,
+    ]);
   }
   async function testPrinter(printerId: string) {
     setError(null);
@@ -169,6 +209,13 @@ export function App() {
   async function retryPendingPrints() {
     setError(null);
     const updatedOrders = await client.retryPendingKitchenPrints();
+    const current = updatedOrders.find((entry) => entry.id === order?.id);
+    if (current) setOrder(current);
+    await refresh();
+  }
+  async function retryPendingReceiptPrints() {
+    setError(null);
+    const updatedOrders = await client.retryPendingReceiptPrints();
     const current = updatedOrders.find((entry) => entry.id === order?.id);
     if (current) setOrder(current);
     await refresh();
@@ -201,6 +248,8 @@ export function App() {
           onSendToKitchen={sendToKitchen}
           sendingToKitchen={sendingToKitchen}
           onReprintTicket={(ticketId) => void reprintTicket(ticketId)}
+          onRecordPayment={recordPayment}
+          onReprintReceipt={reprintReceipt}
         />
       </div>
     ) : (
@@ -226,6 +275,7 @@ export function App() {
             onSavePrinter={savePrinter}
             onTestPrinter={testPrinter}
             onRetryPrints={retryPendingPrints}
+            onRetryReceiptPrints={retryPendingReceiptPrints}
           />
         )}
       </div>

@@ -43,10 +43,34 @@ export interface PosOrder {
   paymentStatus: string;
   subtotalMinor: number;
   totalMinor: number;
+  amountPaidMinor: number;
+  amountDueMinor: number;
+  receipt: PosReceipt | null;
   openedAt: string;
   items: OrderItem[];
   kitchenTickets: KitchenTicket[];
   kitchenChangesPending: boolean;
+}
+
+export type PaymentMethod = "cash" | "mobile_money" | "card" | "other";
+export interface PosPayment {
+  id: string;
+  amountMinor: number;
+  method: PaymentMethod;
+  reference: string | null;
+  cashTenderedMinor: number | null;
+  changeMinor: number | null;
+}
+export interface PosReceipt {
+  id: string;
+  receiptNumber: number;
+  totalMinor: number;
+  issuedAt: string;
+  printStatus: "pending" | "printed" | "failed";
+  printedAt: string | null;
+  lastPrintError: string | null;
+  payments: PosPayment[];
+  items: OrderItem[];
 }
 
 export type OpenOrder = Omit<
@@ -111,6 +135,7 @@ export interface PosClient {
   listPrinters(): Promise<PosPrinterConfig[]>;
   savePrinter(input: {
     id?: string;
+    role?: "kitchen" | "receipt";
     name: string;
     connectionType: "network" | "usb";
     address: string;
@@ -122,6 +147,17 @@ export interface PosClient {
   testPrinter(printerId: string): Promise<void>;
   retryPendingKitchenPrints(): Promise<PosOrder[]>;
   reprintKitchenTicket(orderId: string, ticketId: string): Promise<void>;
+  recordPayment(input: {
+    orderId: string;
+    method: PaymentMethod;
+    amountMinor: number;
+    cashTenderedMinor?: number | null;
+    reference?: string | null;
+    idempotencyKey: string;
+  }): Promise<PosOrder>;
+  listReceipts(): Promise<PosReceipt[]>;
+  retryPendingReceiptPrints(): Promise<PosOrder[]>;
+  reprintReceipt(orderId: string): Promise<void>;
 }
 
 export function formatGhs(minor: number): string {

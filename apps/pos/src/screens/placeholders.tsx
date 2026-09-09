@@ -246,6 +246,7 @@ export function SettingsScreen({
   onSavePrinter,
   onTestPrinter,
   onRetryPrints,
+  onRetryReceiptPrints,
 }: {
   printers: PosPrinterConfig[];
   onSavePrinter: (input: {
@@ -260,6 +261,7 @@ export function SettingsScreen({
   }) => Promise<void>;
   onTestPrinter: (printerId: string) => Promise<void>;
   onRetryPrints: () => Promise<void>;
+  onRetryReceiptPrints: () => Promise<void>;
 }) {
   const kitchenPrinter = printers.find((printer) => printer.role === "kitchen");
   const [name, setName] = useState(kitchenPrinter?.name ?? "Kitchen printer");
@@ -316,7 +318,7 @@ export function SettingsScreen({
           <div>
             <h2 className="font-black">Kitchen printer</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Network ESC/POS printer. USB and receipt printing are deferred.
+              Network ESC/POS printer for kitchen tickets.
             </p>
           </div>
           <Badge tone={kitchenPrinter?.active ? "success" : "neutral"}>
@@ -397,6 +399,12 @@ export function SettingsScreen({
           <Button variant="secondary" onClick={() => void onRetryPrints()}>
             Retry pending prints
           </Button>
+          <Button
+            variant="secondary"
+            onClick={() => void onRetryReceiptPrints()}
+          >
+            Retry receipt prints
+          </Button>
         </div>
         {message ? (
           <p role="status" className="mt-3 text-sm text-muted-foreground">
@@ -404,6 +412,144 @@ export function SettingsScreen({
           </p>
         ) : null}
       </Card>
+      <ReceiptPrinterSettings
+        printer={printers.find((printer) => printer.role === "receipt")}
+        onSavePrinter={onSavePrinter}
+        onTestPrinter={onTestPrinter}
+      />
     </div>
+  );
+}
+
+function ReceiptPrinterSettings({
+  printer,
+  onSavePrinter,
+  onTestPrinter,
+}: {
+  printer?: PosPrinterConfig;
+  onSavePrinter: (input: {
+    id?: string;
+    role?: "kitchen" | "receipt";
+    name: string;
+    connectionType: "network" | "usb";
+    address: string;
+    port: number | null;
+    paperWidth: 58 | 80;
+    cutterEnabled: boolean;
+    active: boolean;
+  }) => Promise<void>;
+  onTestPrinter: (printerId: string) => Promise<void>;
+}) {
+  const [name, setName] = useState(printer?.name ?? "Receipt printer");
+  const [address, setAddress] = useState(printer?.address ?? "192.168.1.101");
+  const [port, setPort] = useState(String(printer?.port ?? 9100));
+  const [paperWidth, setPaperWidth] = useState<58 | 80>(
+    printer?.paperWidth ?? 80,
+  );
+  const [active, setActive] = useState(printer?.active ?? true);
+  const [message, setMessage] = useState<string | null>(null);
+  async function save() {
+    try {
+      await onSavePrinter({
+        id: printer?.id,
+        role: "receipt",
+        name,
+        connectionType: "network",
+        address,
+        port: Number(port),
+        paperWidth,
+        cutterEnabled: printer?.cutterEnabled ?? true,
+        active,
+      });
+      setMessage("Receipt printer saved.");
+    } catch (cause) {
+      setMessage(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to save receipt printer.",
+      );
+    }
+  }
+  return (
+    <Card className="max-w-2xl p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="font-black">Receipt printer</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Used for customer receipts. It may share the kitchen printer.
+          </p>
+        </div>
+        <Badge tone={printer?.active ? "success" : "neutral"}>
+          {printer
+            ? printer.active
+              ? "Active"
+              : "Disabled"
+            : "Not configured"}
+        </Badge>
+      </div>
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        <label className="text-sm font-semibold">
+          Printer name
+          <input
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-normal"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        <label className="text-sm font-semibold">
+          IP address / hostname
+          <input
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-normal"
+            value={address}
+            onChange={(event) => setAddress(event.target.value)}
+          />
+        </label>
+        <label className="text-sm font-semibold">
+          Raw TCP port
+          <input
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-normal"
+            type="number"
+            value={port}
+            onChange={(event) => setPort(event.target.value)}
+          />
+        </label>
+        <label className="text-sm font-semibold">
+          Paper width
+          <select
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-normal"
+            value={paperWidth}
+            onChange={(event) =>
+              setPaperWidth(Number(event.target.value) as 58 | 80)
+            }
+          >
+            <option value={80}>80mm</option>
+            <option value={58}>58mm</option>
+          </select>
+        </label>
+      </div>
+      <div className="mt-4 flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={active}
+          onChange={(event) => setActive(event.target.checked)}
+        />{" "}
+        Active
+      </div>
+      <div className="mt-5 flex gap-3">
+        <Button onClick={() => void save()}>Save printer</Button>
+        <Button
+          variant="secondary"
+          disabled={!printer}
+          onClick={() => printer && void onTestPrinter(printer.id)}
+        >
+          Test Print
+        </Button>
+      </div>
+      {message ? (
+        <p role="status" className="mt-3 text-sm text-muted-foreground">
+          {message}
+        </p>
+      ) : null}
+    </Card>
   );
 }

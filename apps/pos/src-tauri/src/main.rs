@@ -38,6 +38,33 @@ struct KitchenTicketItemRequest {
     notes: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReceiptRequest {
+    business_name: String,
+    receipt_number: u32,
+    order_number: u32,
+    issued_at: String,
+    table_name: Option<String>,
+    items: Vec<ReceiptItemRequest>,
+    subtotal_minor: i64,
+    total_minor: i64,
+    payments: Vec<ReceiptPaymentRequest>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReceiptItemRequest {
+    name: String,
+    quantity: u32,
+    line_total_minor: i64,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReceiptPaymentRequest {
+    method: String,
+    amount_minor: i64,
+}
+
 fn line_fit(value: &str, width: usize) -> String {
     let mut chars = value.chars();
     let fitted: String = chars.by_ref().take(width).collect();
@@ -103,6 +130,66 @@ fn ticket_text(ticket: &KitchenTicketRequest, paper_width: u16) -> String {
         .join("\n")
 }
 
+fn receipt_text(receipt: &ReceiptRequest, paper_width: u16) -> String {
+    let width = if paper_width == 58 { 32 } else { 48 };
+    let separator = "-".repeat(width);
+    let money = |minor: i64| format!("GHS {:.2}", minor as f64 / 100.0);
+    let row = |label: &str, value: String| {
+        let left = line_fit(label, width.saturating_sub(value.len() + 1));
+        format!(
+            "{}{}{}",
+            left,
+            " ".repeat(width.saturating_sub(left.len() + value.len())),
+            value
+        )
+    };
+    let mut lines = vec![
+        receipt.business_name.clone(),
+        "CUSTOMER RECEIPT".into(),
+        separator.clone(),
+        row("Receipt #", format!("{:06}", receipt.receipt_number)),
+        row("Order #", format!("{:04}", receipt.order_number)),
+        row("Date", receipt.issued_at.clone()),
+        row(
+            "Table",
+            receipt
+                .table_name
+                .clone()
+                .unwrap_or_else(|| "TAKEAWAY".into()),
+        ),
+        separator.clone(),
+    ];
+    for item in &receipt.items {
+        lines.push(line_fit(
+            &format!("{} x {}", item.quantity, item.name),
+            width,
+        ));
+        lines.push(row("", money(item.line_total_minor)));
+    }
+    lines.extend([
+        separator,
+        row("Subtotal", money(receipt.subtotal_minor)),
+        row("Total", money(receipt.total_minor)),
+        String::new(),
+        "PAYMENTS".into(),
+    ]);
+    for payment in &receipt.payments {
+        let label = if payment.method == "mobile_money" {
+            "Mobile Money"
+        } else {
+            &payment.method
+        };
+        lines.push(row(label, money(payment.amount_minor)));
+    }
+    lines.extend([
+        "Total Paid".to_string(),
+        "PAID".into(),
+        "Thank you".into(),
+        String::new(),
+    ]);
+    lines.join("\n")
+}
+
 fn escpos(text: &str, cutter_enabled: bool) -> Vec<u8> {
     let mut output = vec![0x1b, 0x40, 0x1b, 0x61, 0x00];
     for line in text.lines() {
@@ -125,6 +212,18 @@ fn escpos(text: &str, cutter_enabled: bool) -> Vec<u8> {
         output.extend_from_slice(&[0x1d, 0x56, 0x00]);
     }
     output
+}
+
+#[tauri::command]
+async fn print_receipt(request: PrinterRequest, receipt: ReceiptRequest) -> Result<(), String> {
+    let bytes = escpos(
+        &receipt_text(&receipt, request.paper_width),
+        request.cutter_enabled,
+    );
+    tauri::async_runtime::spawn_blocking(move || send_tcp(&request, &bytes))
+        .await
+        .map_err(|error| format!("print worker failed: {error}"))??;
+    Ok(())
 }
 
 fn send_tcp(request: &PrinterRequest, bytes: &[u8]) -> Result<(), String> {
@@ -219,6 +318,14 @@ fn main() {
                             ),
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 3,
+                            description: "payment_receipt_v1",
+                            sql: include_str!(
+                                "../../../../packages/database/drizzle/0002_lovely_ghost_rider.sql"
+                            ),
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),
@@ -229,7 +336,11 @@ fn main() {
             fs::create_dir_all(data_dir.join("logs"))?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![print_kitchen_ticket, test_printer])
+        .invoke_handler(tauri::generate_handler![
+            print_kitchen_ticket,
+            print_receipt,
+            test_printer
+        ])
         .run(tauri::generate_context!())
         .expect("error while running ATE05 POS");
 }

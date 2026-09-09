@@ -1,7 +1,146 @@
 import { Badge, Button, Card } from "@ate05/ui";
 import { Icon } from "./icons";
 import { Input } from "./ui/input";
-import { formatGhs, type PosOrder } from "../lib/pos-client";
+import { useState } from "react";
+import {
+  formatGhs,
+  type PaymentMethod,
+  type PosClient,
+  type PosOrder,
+} from "../lib/pos-client";
+
+function PaymentPanel({
+  order,
+  onRecordPayment,
+  onReprintReceipt,
+}: {
+  order: PosOrder;
+  onRecordPayment: (input: {
+    orderId: string;
+    method: PaymentMethod;
+    amountMinor: number;
+    cashTenderedMinor?: number | null;
+    reference?: string | null;
+    idempotencyKey: string;
+  }) => Promise<void>;
+  onReprintReceipt: () => Promise<void>;
+}) {
+  const [method, setMethod] = useState<PaymentMethod>("cash");
+  const [amount, setAmount] = useState(String(order.amountDueMinor / 100));
+  const [tendered, setTendered] = useState("");
+  const [reference, setReference] = useState("");
+  const [busy, setBusy] = useState(false);
+  const amountMinor = Math.round(Number(amount || 0) * 100);
+  const tenderedMinor = Math.round(Number(tendered || amount || 0) * 100);
+  const changeMinor =
+    method === "cash" ? Math.max(0, tenderedMinor - amountMinor) : 0;
+  async function submit() {
+    setBusy(true);
+    try {
+      await onRecordPayment({
+        orderId: order.id,
+        method,
+        amountMinor,
+        cashTenderedMinor: method === "cash" ? tenderedMinor : null,
+        reference: reference || null,
+        idempotencyKey: crypto.randomUUID(),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mb-4 rounded-md border bg-muted/30 p-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+          Take payment
+        </p>
+        <span className="font-black">
+          {formatGhs(order.amountDueMinor)} due
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-4 gap-1">
+        {(["cash", "mobile_money", "card", "other"] as PaymentMethod[]).map(
+          (entry) => (
+            <Button
+              key={entry}
+              size="sm"
+              variant={method === entry ? "primary" : "secondary"}
+              onClick={() => setMethod(entry)}
+            >
+              {entry === "mobile_money"
+                ? "MoMo"
+                : entry[0]!.toUpperCase() + entry.slice(1)}
+            </Button>
+          ),
+        )}
+      </div>
+      <label className="mt-3 block text-xs font-semibold">
+        Amount
+        <Input
+          aria-label="Payment amount"
+          value={amount}
+          onChange={(event) => setAmount(event.target.value)}
+          type="number"
+          min="0.01"
+          step="0.01"
+        />
+      </label>
+      {method === "cash" ? (
+        <label className="mt-2 block text-xs font-semibold">
+          Cash tendered
+          <Input
+            value={tendered}
+            onChange={(event) => setTendered(event.target.value)}
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder={amount}
+          />
+          <span className="mt-1 block text-muted-foreground">
+            Change: {formatGhs(changeMinor)}
+          </span>
+        </label>
+      ) : (
+        <label className="mt-2 block text-xs font-semibold">
+          Reference (optional)
+          <Input
+            value={reference}
+            onChange={(event) => setReference(event.target.value)}
+            placeholder="Transaction reference"
+          />
+        </label>
+      )}
+      <Button
+        className="mt-3 w-full"
+        disabled={
+          busy ||
+          amountMinor <= 0 ||
+          amountMinor > order.amountDueMinor ||
+          (method === "cash" && tenderedMinor < amountMinor)
+        }
+        onClick={() => void submit()}
+      >
+        {busy ? "Saving…" : "Confirm Payment"}
+      </Button>
+      {order.receipt ? (
+        <div className="mt-3 flex items-center justify-between text-xs">
+          <span>
+            Receipt #{String(order.receipt.receiptNumber).padStart(6, "0")} ·{" "}
+            {order.receipt.printStatus}
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void onReprintReceipt()}
+          >
+            Reprint Receipt
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export function OrderPanel({
   order,
@@ -10,6 +149,8 @@ export function OrderPanel({
   onSendToKitchen,
   sendingToKitchen,
   onReprintTicket,
+  onRecordPayment,
+  onReprintReceipt,
 }: {
   order: PosOrder | null;
   onQuantityChange: (id: string, quantity: number) => void;
@@ -17,6 +158,10 @@ export function OrderPanel({
   onSendToKitchen: () => void;
   sendingToKitchen: boolean;
   onReprintTicket: (ticketId: string) => void;
+  onRecordPayment: (
+    input: Parameters<PosClient["recordPayment"]>[0],
+  ) => Promise<void>;
+  onReprintReceipt: () => Promise<void>;
 }) {
   const items = order?.items ?? [];
   const pendingPrints =
@@ -127,6 +272,32 @@ export function OrderPanel({
         ))}
       </div>
       <div className="border-t p-5">
+        {order && order.amountDueMinor > 0 ? (
+          <PaymentPanel
+            order={order}
+            onRecordPayment={onRecordPayment}
+            onReprintReceipt={onReprintReceipt}
+          />
+        ) : order?.receipt ? (
+          <div className="mb-4 rounded-md border bg-success/10 p-3 text-sm">
+            <div className="flex items-center justify-between font-bold">
+              <span>
+                PAID · Receipt #
+                {String(order.receipt.receiptNumber).padStart(6, "0")}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void onReprintReceipt()}
+              >
+                Reprint Receipt
+              </Button>
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              Paid {formatGhs(order.amountPaidMinor)}
+            </p>
+          </div>
+        ) : null}
         {order?.kitchenTickets.length ? (
           <div className="mb-4 rounded-md border bg-muted/30 p-3">
             <div className="mb-2 flex items-center justify-between">
@@ -200,7 +371,18 @@ export function OrderPanel({
           >
             {sendingToKitchen ? "Sending…" : "Send to Kitchen"}
           </Button>
-          <Button variant="secondary" className="w-full" disabled>
+          <Button
+            variant="secondary"
+            className="w-full"
+            disabled={!order || order.amountDueMinor <= 0}
+            onClick={() =>
+              document
+                .querySelector<HTMLInputElement>(
+                  'input[aria-label="Payment amount"]',
+                )
+                ?.focus()
+            }
+          >
             Take Payment <Icon name="arrow" width="17" height="17" />
           </Button>
         </div>

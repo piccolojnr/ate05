@@ -15,6 +15,8 @@ This package owns ATE05's local SQLite persistence: the Drizzle schema, checked-
 - Order items and kitchen-ticket items hold name, price/quantity, notes, and action snapshots. This allows historic receipts and ticket reprints to survive menu changes.
 - A kitchen ticket belongs to an order but has its own sequence and type (`initial`, `addition`, or `cancellation`). Tickets are immutable, remain `pending` until a future printer succeeds, and are never marked printed on creation.
 - Printer configuration is persisted per business and role. V1 uses one active network kitchen printer, but the schema also permits future receipt/bar printers and USB configurations.
+- Payments are integer minor units and may be split across recorded cash, mobile money, card, and other records. Cash tendered/change are metadata; only the applied amount counts toward revenue. A business-scoped idempotency key prevents duplicate cashier submissions.
+- A fully paid order is completed in V1 and receives one immutable receipt snapshot with a business-scoped receipt number. Receipt creation is committed before printing; receipt print state is independent and retryable. Reprints reuse the same receipt and never create another payment.
 - Physical printing is deliberately post-commit: a failed network write marks the ticket `failed` with attempt metadata and never removes or rolls back the kitchen instruction.
 - Kitchen deltas are derived from ticket history: for each order line, sent quantity is the sum of ticket-item additions minus cancellations. This keeps the synchronization marker auditable without adding mutable sent-quantity fields to order items.
 - A material note change is explicit: the next send creates a cancellation for the previously sent quantity/note followed by an addition for the current quantity/note. An unsent item removed before its first send creates no cancellation.
@@ -26,7 +28,7 @@ This package owns ATE05's local SQLite persistence: the Drizzle schema, checked-
 - record payment + recalculate/update order payment status
 - calculate kitchen delta + create ticket/item snapshots + update order status in one SQLite transaction
 - create stock movement + update inventory balance
-- close order + issue receipt snapshot + assign receipt number
+- record payment + update payment status + issue receipt snapshot/number when fully paid in one SQLite transaction, then attempt receipt printing after commit
 - create order + item snapshots + assign local order number
 
 The development seed is deliberately explicit: call `seedDevelopmentData` only in local development/test setup after `initializeDatabase`.

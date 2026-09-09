@@ -5,6 +5,7 @@ import type {
   PosBootstrap,
   PosClient,
   PosOrder,
+  PosPayment,
   PosPrinterConfig,
   RestaurantTable,
 } from "./pos-client";
@@ -17,6 +18,7 @@ const createdBy = "00000000-0000-4000-8000-000000000002";
 
 interface PreviewState {
   nextOrderNumber: number;
+  nextReceiptNumber: number;
   orders: PosOrder[];
   printers: PosPrinterConfig[];
 }
@@ -67,9 +69,20 @@ function readState(): PreviewState {
   const raw = window.localStorage.getItem(storageKey);
   const state = raw
     ? (JSON.parse(raw) as PreviewState)
-    : { nextOrderNumber: 1, orders: [], printers: [] };
+    : { nextOrderNumber: 1, nextReceiptNumber: 1, orders: [], printers: [] };
+  state.nextReceiptNumber ??= 1;
   state.printers ??= [];
   for (const order of state.orders) {
+    order.amountPaidMinor ??=
+      order.receipt?.payments.reduce(
+        (sum, payment) => sum + payment.amountMinor,
+        0,
+      ) ?? 0;
+    order.amountDueMinor ??= Math.max(
+      0,
+      order.totalMinor - order.amountPaidMinor,
+    );
+    order.receipt ??= null;
     order.kitchenTickets ??= [];
     for (const ticket of order.kitchenTickets) {
       ticket.lastPrintError ??= null;
@@ -88,7 +101,18 @@ function refreshOrder(order: PosOrder): PosOrder {
     (total, item) => total + item.lineTotalMinor,
     0,
   );
-  return { ...order, subtotalMinor, totalMinor: subtotalMinor };
+  const amountPaidMinor =
+    order.receipt?.payments.reduce(
+      (sum, payment) => sum + payment.amountMinor,
+      0,
+    ) ?? 0;
+  return {
+    ...order,
+    subtotalMinor,
+    totalMinor: subtotalMinor,
+    amountPaidMinor,
+    amountDueMinor: Math.max(0, subtotalMinor - amountPaidMinor),
+  };
 }
 
 function kitchenSyncLines(order: PosOrder): KitchenSyncLine[] {
@@ -172,7 +196,9 @@ export function createBrowserPreviewClient(): PosClient {
         })),
         openOrders: state.orders
           .filter((order) =>
-            ["open", "sent_to_kitchen", "preparing"].includes(order.status),
+            ["open", "sent_to_kitchen", "preparing", "completed"].includes(
+              order.status,
+            ),
           )
           .map((order) => ({
             id: order.id,
@@ -185,6 +211,9 @@ export function createBrowserPreviewClient(): PosClient {
             paymentStatus: order.paymentStatus,
             subtotalMinor: order.subtotalMinor,
             totalMinor: order.totalMinor,
+            amountPaidMinor: order.amountPaidMinor,
+            amountDueMinor: order.amountDueMinor,
+            receipt: order.receipt,
             openedAt: order.openedAt,
           })),
       };
@@ -212,6 +241,9 @@ export function createBrowserPreviewClient(): PosClient {
           paymentStatus: "unpaid",
           subtotalMinor: 0,
           totalMinor: 0,
+          amountPaidMinor: 0,
+          amountDueMinor: 0,
+          receipt: null,
           openedAt: new Date().toISOString(),
           items: [],
           kitchenTickets: [],
@@ -369,7 +401,7 @@ export function createBrowserPreviewClient(): PosClient {
         id: input.id ?? crypto.randomUUID(),
         businessId,
         name: input.name.trim(),
-        role: "kitchen",
+        role: input.role ?? "kitchen",
         connectionType: input.connectionType,
         address: input.address.trim(),
         port: input.port,
@@ -400,6 +432,87 @@ export function createBrowserPreviewClient(): PosClient {
         !order.kitchenTickets.some((ticket) => ticket.id === ticketId)
       )
         throw new Error("Kitchen ticket not found.");
+    },
+    async recordPayment(input) {
+      const state = readState();
+      const order = state.orders.find((entry) => entry.id === input.orderId);
+      if (!order) throw new Error("Order not found.");
+      order.receipt ??= null;
+      const existingPayment = order.receipt?.payments.find(
+        (payment) => payment.id === input.idempotencyKey,
+      );
+      if (existingPayment) return order;
+      const paid = order.amountPaidMinor;
+      const due = Math.max(0, order.totalMinor - paid);
+      if (input.amountMinor <= 0 || input.amountMinor > due)
+        throw new Error("Payment amount is invalid.");
+      const tendered =
+        input.method === "cash"
+          ? (input.cashTenderedMinor ?? input.amountMinor)
+          : null;
+      if (tendered !== null && tendered < input.amountMinor)
+        throw new Error("Cash tendered must cover the payment.");
+      const payment: PosPayment = {
+        id: input.idempotencyKey,
+        amountMinor: input.amountMinor,
+        method: input.method,
+        reference: input.reference?.trim() || null,
+        cashTenderedMinor: tendered,
+        changeMinor: tendered === null ? null : tendered - input.amountMinor,
+      };
+      const payments = [...(order.receipt?.payments ?? []), payment];
+      const amountPaidMinor = paid + input.amountMinor;
+      order.amountPaidMinor = amountPaidMinor;
+      order.amountDueMinor = Math.max(0, order.totalMinor - amountPaidMinor);
+      order.paymentStatus =
+        order.amountDueMinor === 0 ? "paid" : "partially_paid";
+      if (order.amountDueMinor === 0) {
+        order.status = "completed";
+        order.receipt = {
+          id: order.receipt?.id ?? crypto.randomUUID(),
+          receiptNumber:
+            order.receipt?.receiptNumber ?? state.nextReceiptNumber++,
+          totalMinor: order.totalMinor,
+          issuedAt: new Date().toISOString(),
+          printStatus: "printed",
+          printedAt: new Date().toISOString(),
+          lastPrintError: null,
+          payments,
+          items: order.items.map((item) => ({ ...item })),
+        };
+      } else if (order.receipt) {
+        order.receipt.payments = payments;
+      }
+      state.orders = state.orders.map((entry) =>
+        entry.id === order.id ? order : entry,
+      );
+      writeState(state);
+      return order;
+    },
+    async listReceipts() {
+      return readState().orders.flatMap((entry) =>
+        entry.receipt ? [entry.receipt] : [],
+      );
+    },
+    async retryPendingReceiptPrints() {
+      return readState().orders.filter(
+        (entry) => entry.receipt?.printStatus !== "printed",
+      );
+    },
+    async reprintReceipt(orderId) {
+      const state = readState();
+      const order = state.orders.find((entry) => entry.id === orderId);
+      if (!order?.receipt) throw new Error("Receipt not found.");
+      order.receipt = {
+        ...order.receipt,
+        printStatus: "printed",
+        printedAt: new Date().toISOString(),
+        lastPrintError: null,
+      };
+      state.orders = state.orders.map((entry) =>
+        entry.id === order.id ? order : entry,
+      );
+      writeState(state);
     },
   };
 }

@@ -15,6 +15,13 @@
       "when": 1788984685135,
       "tag": "0001_chilly_harpoon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788986551821,
+      "tag": "0002_lovely_ghost_rider",
+      "breakpoints": true
     }
   ]
 }
