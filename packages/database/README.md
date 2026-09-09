@@ -25,6 +25,8 @@ This package owns ATE05's local SQLite persistence: the Drizzle schema, checked-
 
 ## Transaction boundaries for future services
 
+Inventory quantities use deterministic integer counts in the item's canonical unit. V1 does not convert between units; use g/ml when fractional kg/litre quantities are needed (for example, 12,500 g). Every receive, kitchen issue, waste, return, opening balance, and count adjustment writes an immutable movement. Item units cannot change after movement history exists.
+
 - record payment + recalculate/update order payment status
 - calculate kitchen delta + create ticket/item snapshots + update order status in one SQLite transaction
 - create stock movement + update inventory balance

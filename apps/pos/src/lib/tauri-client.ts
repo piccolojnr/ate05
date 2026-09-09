@@ -11,6 +11,9 @@ import type {
   KitchenTicket,
   OrderType,
   PosBootstrap,
+  InventoryItem,
+  InventoryUnit,
+  StockMovement,
   PosClient,
   PosOrder,
   PosPayment,
@@ -49,9 +52,51 @@ function asNumber(value: unknown): number {
 function asNullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
+function inventoryState(
+  quantity: number,
+  threshold: number | null,
+): InventoryItem["stockState"] {
+  if (quantity === 0) return "out_of_stock";
+  if (threshold !== null && quantity <= threshold) return "low_stock";
+  return "in_stock";
+}
+function mapInventory(row: Row): InventoryItem {
+  const currentQuantity = asNumber(row.currentQuantity);
+  const reorderThreshold =
+    row.reorderThreshold == null ? null : asNumber(row.reorderThreshold);
+  return {
+    id: asString(row.id),
+    name: asString(row.name),
+    unit: asString(row.unit) as InventoryUnit,
+    currentQuantity,
+    reorderThreshold,
+    active: Boolean(asNumber(row.active)),
+    stockState: inventoryState(currentQuantity, reorderThreshold),
+  };
+}
+function mapStockMovement(row: Row): StockMovement {
+  return {
+    id: asString(row.id),
+    inventoryItemId: asString(row.inventoryItemId),
+    type: asString(row.type) as StockMovement["type"],
+    quantityDelta: asNumber(row.quantityDelta),
+    balanceAfter: asNumber(row.balanceAfter),
+    reason: asNullableString(row.reason),
+    createdBy: asNullableString(row.createdBy),
+    createdAt: asString(row.createdAt),
+  };
+}
 async function database(): Promise<SqlDatabase> {
   databasePromise ??= Database.load(databaseUrl);
   return databasePromise;
+}
+async function listInventoryRows(db: SqlDatabase): Promise<InventoryItem[]> {
+  const rows = await select<Row>(
+    db,
+    "SELECT id, name, unit, current_quantity AS currentQuantity, reorder_threshold AS reorderThreshold, active FROM inventory_items WHERE business_id = $1 ORDER BY active DESC, name",
+    [businessId],
+  );
+  return rows.map(mapInventory);
 }
 async function select<T extends Row>(
   db: SqlDatabase,
@@ -555,6 +600,74 @@ async function recalculateTotals(
   );
 }
 
+async function recordInventoryMovementNative(
+  db: SqlDatabase,
+  itemId: string,
+  type: StockMovement["type"],
+  delta: number,
+  reason: string | null,
+): Promise<InventoryItem> {
+  if (!Number.isSafeInteger(delta) || delta === 0)
+    throw new PosClientError(
+      "validation",
+      "Quantity must be a non-zero whole number.",
+    );
+  if ((type === "waste" || type === "adjustment") && !reason?.trim())
+    throw new PosClientError(
+      "validation",
+      "A reason is required for this movement.",
+    );
+  await execute(db, "BEGIN IMMEDIATE");
+  try {
+    const [item] = await select<Row>(
+      db,
+      "SELECT id, current_quantity AS currentQuantity, unit, active FROM inventory_items WHERE id = $1 AND business_id = $2",
+      [itemId, businessId],
+    );
+    if (!item)
+      throw new PosClientError("not_found", "Inventory item not found.");
+    if (!asNumber(item.active))
+      throw new PosClientError("invalid_state", "Inventory item is inactive.");
+    const current = asNumber(item.currentQuantity);
+    const next = current + delta;
+    if (next < 0)
+      throw new PosClientError(
+        "validation",
+        "Only " + current + " " + asString(item.unit) + " is available.",
+      );
+    const now = timestamp();
+    await execute(
+      db,
+      "INSERT INTO stock_movements (id, business_id, inventory_item_id, type, quantity_delta, balance_after, reason, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+      [
+        crypto.randomUUID(),
+        businessId,
+        itemId,
+        type,
+        delta,
+        next,
+        reason?.trim() || null,
+        createdBy,
+        now,
+      ],
+    );
+    await execute(
+      db,
+      "UPDATE inventory_items SET current_quantity = $1, updated_at = $2 WHERE id = $3 AND business_id = $4",
+      [next, now, itemId, businessId],
+    );
+    await execute(db, "COMMIT");
+  } catch (error) {
+    await execute(db, "ROLLBACK");
+    throw error;
+  }
+  const items = await listInventoryRows(db);
+  const result = items.find((item) => item.id === itemId);
+  if (!result)
+    throw new PosClientError("not_found", "Inventory item not found.");
+  return result;
+}
+
 /** Native-only adapter. Fixed operations are the only SQL sent through Tauri. */
 export function createTauriClient(): PosClient {
   return {
@@ -581,6 +694,7 @@ export function createTauriClient(): PosClient {
         "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt, COALESCE((SELECT SUM(p.amount_minor) FROM payments p WHERE p.order_id = o.id AND p.business_id = o.business_id AND p.status = 'recorded'), 0) AS amountPaidMinor FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = $1 AND o.status IN ('open', 'sent_to_kitchen', 'preparing', 'completed') ORDER BY o.opened_at DESC, o.order_number DESC",
         [businessId],
       );
+      const inventory = await listInventoryRows(db);
       return {
         businessId,
         createdBy,
@@ -603,6 +717,7 @@ export function createTauriClient(): PosClient {
           status: asString(row.status) as "available" | "occupied" | "reserved",
         })),
         openOrders: openOrders.map((row) => mapOrder(row, [])),
+        inventory,
       };
     },
     async addMenuItem(input) {
@@ -1196,6 +1311,197 @@ export function createTauriClient(): PosClient {
         order,
         await getActiveReceiptPrinter(db),
         true,
+      );
+    },
+    async listInventory() {
+      return listInventoryRows(await database());
+    },
+    async getInventoryItem(itemId) {
+      const item = (await listInventoryRows(await database())).find(
+        (entry) => entry.id === itemId,
+      );
+      if (!item)
+        throw new PosClientError("not_found", "Inventory item not found.");
+      return item;
+    },
+    async listStockMovements(itemId) {
+      const db = await database();
+      const rows = await select<Row>(
+        db,
+        "SELECT id, inventory_item_id AS inventoryItemId, type, quantity_delta AS quantityDelta, balance_after AS balanceAfter, reason, created_by AS createdBy, created_at AS createdAt FROM stock_movements WHERE inventory_item_id = $1 AND business_id = $2 ORDER BY created_at DESC, id DESC",
+        [itemId, businessId],
+      );
+      return rows.map(mapStockMovement);
+    },
+    async createInventoryItem(input) {
+      if (!input.name.trim())
+        throw new PosClientError(
+          "validation",
+          "Inventory item name is required.",
+        );
+      if (
+        !Number.isSafeInteger(input.startingQuantity) ||
+        input.startingQuantity < 0
+      )
+        throw new PosClientError(
+          "validation",
+          "Starting quantity must be a non-negative whole number.",
+        );
+      const id = crypto.randomUUID();
+      const now = timestamp();
+      const db = await database();
+      await execute(db, "BEGIN IMMEDIATE");
+      try {
+        await execute(
+          db,
+          "INSERT INTO inventory_items (id, business_id, name, unit, current_quantity, reorder_threshold, active, created_at, updated_at) VALUES ($1, $2, $3, $4, 0, $5, 1, $6, $6)",
+          [
+            id,
+            businessId,
+            input.name.trim(),
+            input.unit,
+            input.reorderThreshold,
+            now,
+          ],
+        );
+        if (input.startingQuantity > 0) {
+          await execute(
+            db,
+            "INSERT INTO stock_movements (id, business_id, inventory_item_id, type, quantity_delta, balance_after, reason, created_by, created_at) VALUES ($1, $2, $3, 'purchase', $4, $4, 'Opening balance', $5, $6)",
+            [
+              crypto.randomUUID(),
+              businessId,
+              id,
+              input.startingQuantity,
+              createdBy,
+              now,
+            ],
+          );
+          await execute(
+            db,
+            "UPDATE inventory_items SET current_quantity = $1, updated_at = $2 WHERE id = $3 AND business_id = $4",
+            [input.startingQuantity, now, id, businessId],
+          );
+        }
+        await execute(db, "COMMIT");
+      } catch (error) {
+        await execute(db, "ROLLBACK");
+        throw error;
+      }
+      return (await listInventoryRows(db)).find((item) => item.id === id)!;
+    },
+    async updateInventoryItem(input) {
+      const db = await database();
+      const [item] = await select<Row>(
+        db,
+        "SELECT id, unit FROM inventory_items WHERE id = $1 AND business_id = $2",
+        [input.id, businessId],
+      );
+      if (!item)
+        throw new PosClientError("not_found", "Inventory item not found.");
+      const [history] = await select<Row>(
+        db,
+        "SELECT id FROM stock_movements WHERE inventory_item_id = $1 AND business_id = $2 LIMIT 1",
+        [input.id, businessId],
+      );
+      if (history && asString(item.unit) !== input.unit)
+        throw new PosClientError(
+          "validation",
+          "Unit cannot change after stock movement history exists.",
+        );
+      await execute(
+        db,
+        "UPDATE inventory_items SET name = $1, unit = $2, reorder_threshold = $3, active = $4, updated_at = $5 WHERE id = $6 AND business_id = $7",
+        [
+          input.name.trim(),
+          input.unit,
+          input.reorderThreshold,
+          input.active ? 1 : 0,
+          timestamp(),
+          input.id,
+          businessId,
+        ],
+      );
+      return (await listInventoryRows(db)).find(
+        (entry) => entry.id === input.id,
+      )!;
+    },
+    async receiveStock(itemId, quantity, reason) {
+      if (!Number.isSafeInteger(quantity) || quantity <= 0)
+        throw new PosClientError(
+          "validation",
+          "Quantity must be a positive whole number.",
+        );
+      return recordInventoryMovementNative(
+        await database(),
+        itemId,
+        "purchase",
+        quantity,
+        reason ?? null,
+      );
+    },
+    async issueStock(itemId, quantity, reason) {
+      if (!Number.isSafeInteger(quantity) || quantity <= 0)
+        throw new PosClientError(
+          "validation",
+          "Quantity must be a positive whole number.",
+        );
+      return recordInventoryMovementNative(
+        await database(),
+        itemId,
+        "kitchen_issue",
+        -quantity,
+        reason ?? null,
+      );
+    },
+    async recordWaste(itemId, quantity, reason) {
+      if (!Number.isSafeInteger(quantity) || quantity <= 0)
+        throw new PosClientError(
+          "validation",
+          "Quantity must be a positive whole number.",
+        );
+      return recordInventoryMovementNative(
+        await database(),
+        itemId,
+        "waste",
+        -quantity,
+        reason,
+      );
+    },
+    async returnStock(itemId, quantity, reason) {
+      if (!Number.isSafeInteger(quantity) || quantity <= 0)
+        throw new PosClientError(
+          "validation",
+          "Quantity must be a positive whole number.",
+        );
+      return recordInventoryMovementNative(
+        await database(),
+        itemId,
+        "return",
+        quantity,
+        reason ?? null,
+      );
+    },
+    async adjustStockToCount(itemId, countedQuantity, reason) {
+      if (!Number.isSafeInteger(countedQuantity) || countedQuantity < 0)
+        throw new PosClientError(
+          "validation",
+          "Counted quantity must be a non-negative whole number.",
+        );
+      if (!reason.trim())
+        throw new PosClientError(
+          "validation",
+          "A reason is required for this movement.",
+        );
+      const item = await this.getInventoryItem(itemId);
+      const delta = countedQuantity - item.currentQuantity;
+      if (delta === 0) return item;
+      return recordInventoryMovementNative(
+        await database(),
+        itemId,
+        "adjustment",
+        delta,
+        reason,
       );
     },
   };

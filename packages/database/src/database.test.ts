@@ -246,7 +246,7 @@ describe("ATE05 SQLite database", () => {
     expect(
       database.sqlite
         .prepare(
-          "SELECT quantity_delta, balance_after FROM stock_movements WHERE inventory_item_id = ?",
+          "SELECT quantity_delta, balance_after FROM stock_movements WHERE inventory_item_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
         )
         .get(developmentSeedIds.chicken),
     ).toEqual({ quantity_delta: -5000, balance_after: 25000 });

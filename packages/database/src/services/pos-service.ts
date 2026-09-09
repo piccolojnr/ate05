@@ -108,6 +108,30 @@ export interface SendOrderToKitchenInput {
   userId: string;
 }
 
+export type InventoryUnit =
+  "kg" | "g" | "litre" | "ml" | "bottle" | "piece" | "pack";
+export type StockMovementType =
+  "purchase" | "kitchen_issue" | "waste" | "return" | "adjustment";
+export interface PosInventoryItem {
+  id: string;
+  name: string;
+  unit: InventoryUnit;
+  currentQuantity: number;
+  reorderThreshold: number | null;
+  active: boolean;
+  stockState: "in_stock" | "low_stock" | "out_of_stock";
+}
+export interface PosStockMovement {
+  id: string;
+  inventoryItemId: string;
+  type: StockMovementType;
+  quantityDelta: number;
+  balanceAfter: number;
+  reason: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -142,6 +166,15 @@ function assertOrderShape(input: CreateOrderInput): void {
   if (input.orderType === "takeaway" && input.tableId) {
     throw new Error("Takeaway orders cannot be assigned a table.");
   }
+}
+
+function inventoryState(
+  quantity: number,
+  threshold: number | null,
+): PosInventoryItem["stockState"] {
+  if (quantity === 0) return "out_of_stock";
+  if (threshold !== null && quantity <= threshold) return "low_stock";
+  return "in_stock";
 }
 
 const mutableOrderStatuses = "('open', 'sent_to_kitchen', 'preparing')";
@@ -360,6 +393,225 @@ export function createPosService(sqlite: Database.Database) {
       .all(businessId) as OpenOrderSummary[];
   }
 
+  function mapInventory(row: {
+    id: string;
+    name: string;
+    unit: InventoryUnit;
+    currentQuantity: number;
+    reorderThreshold: number | null;
+    active: number;
+  }): PosInventoryItem {
+    return {
+      ...row,
+      active: Boolean(row.active),
+      stockState: inventoryState(row.currentQuantity, row.reorderThreshold),
+    };
+  }
+
+  function listInventory(businessId: string): PosInventoryItem[] {
+    return (
+      sqlite
+        .prepare(
+          "SELECT id, name, unit, current_quantity AS currentQuantity, reorder_threshold AS reorderThreshold, active FROM inventory_items WHERE business_id = ? ORDER BY active DESC, name",
+        )
+        .all(businessId) as Array<{
+        id: string;
+        name: string;
+        unit: InventoryUnit;
+        currentQuantity: number;
+        reorderThreshold: number | null;
+        active: number;
+      }>
+    ).map(mapInventory);
+  }
+
+  function listStockMovements(
+    itemId: string,
+    businessId: string,
+  ): PosStockMovement[] {
+    return sqlite
+      .prepare(
+        "SELECT id, inventory_item_id AS inventoryItemId, type, quantity_delta AS quantityDelta, balance_after AS balanceAfter, reason, created_by AS createdBy, created_at AS createdAt FROM stock_movements WHERE inventory_item_id = ? AND business_id = ? ORDER BY created_at DESC, id DESC",
+      )
+      .all(itemId, businessId) as PosStockMovement[];
+  }
+
+  function createInventoryItem(input: {
+    businessId: string;
+    createdBy: string;
+    name: string;
+    unit: InventoryUnit;
+    startingQuantity: number;
+    reorderThreshold: number | null;
+  }): PosInventoryItem {
+    if (!input.name.trim()) throw new Error("Inventory item name is required.");
+    if (
+      !Number.isSafeInteger(input.startingQuantity) ||
+      input.startingQuantity < 0
+    )
+      throw new Error("Starting quantity must be a non-negative whole number.");
+    if (
+      input.reorderThreshold !== null &&
+      (!Number.isSafeInteger(input.reorderThreshold) ||
+        input.reorderThreshold < 0)
+    )
+      throw new Error("Reorder threshold must be a non-negative whole number.");
+    const id = randomUUID();
+    const createdAt = now();
+    sqlite.transaction(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO inventory_items (id, business_id, name, unit, current_quantity, reorder_threshold, active, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, 1, ?, ?)",
+        )
+        .run(
+          id,
+          input.businessId,
+          input.name.trim(),
+          input.unit,
+          input.reorderThreshold,
+          createdAt,
+          createdAt,
+        );
+      if (input.startingQuantity > 0)
+        sqlite
+          .prepare(
+            "INSERT INTO stock_movements (id, business_id, inventory_item_id, type, quantity_delta, balance_after, reason, created_by, created_at) VALUES (?, ?, ?, 'purchase', ?, ?, 'Opening balance', ?, ?)",
+          )
+          .run(
+            randomUUID(),
+            input.businessId,
+            id,
+            input.startingQuantity,
+            input.startingQuantity,
+            input.createdBy,
+            createdAt,
+          );
+      sqlite
+        .prepare(
+          "UPDATE inventory_items SET current_quantity = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(input.startingQuantity, createdAt, id);
+    })();
+    return listInventory(input.businessId).find((item) => item.id === id)!;
+  }
+
+  function updateInventoryItem(input: {
+    businessId: string;
+    id: string;
+    name: string;
+    unit: InventoryUnit;
+    reorderThreshold: number | null;
+    active: boolean;
+  }): PosInventoryItem {
+    const item = sqlite
+      .prepare(
+        "SELECT id, unit FROM inventory_items WHERE id = ? AND business_id = ?",
+      )
+      .get(input.id, input.businessId) as
+      { id: string; unit: InventoryUnit } | undefined;
+    if (!item) throw new Error("Inventory item not found.");
+    const movement = sqlite
+      .prepare(
+        "SELECT 1 FROM stock_movements WHERE inventory_item_id = ? AND business_id = ? LIMIT 1",
+      )
+      .get(input.id, input.businessId);
+    if (movement && item.unit !== input.unit)
+      throw new Error(
+        "Unit cannot change after stock movement history exists.",
+      );
+    sqlite
+      .prepare(
+        "UPDATE inventory_items SET name = ?, unit = ?, reorder_threshold = ?, active = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+      )
+      .run(
+        input.name.trim(),
+        input.unit,
+        input.reorderThreshold,
+        input.active ? 1 : 0,
+        now(),
+        input.id,
+        input.businessId,
+      );
+    return listInventory(input.businessId).find(
+      (entry) => entry.id === input.id,
+    )!;
+  }
+
+  function recordStockMovement(input: {
+    businessId: string;
+    createdBy: string;
+    itemId: string;
+    type: StockMovementType;
+    quantity: number;
+    reason?: string;
+    adjustmentDelta?: number;
+  }): PosInventoryItem {
+    if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0)
+      throw new Error("Quantity must be a positive whole number.");
+    if (
+      (input.type === "waste" || input.type === "adjustment") &&
+      !input.reason?.trim()
+    )
+      throw new Error("A reason is required for this movement.");
+    let result!: PosInventoryItem;
+    sqlite.transaction(() => {
+      const item = sqlite
+        .prepare(
+          "SELECT id, current_quantity AS currentQuantity, reorder_threshold AS reorderThreshold, name, unit, active FROM inventory_items WHERE id = ? AND business_id = ?",
+        )
+        .get(input.itemId, input.businessId) as
+        | {
+            id: string;
+            currentQuantity: number;
+            reorderThreshold: number | null;
+            name: string;
+            unit: InventoryUnit;
+            active: number;
+          }
+        | undefined;
+      if (!item) throw new Error("Inventory item not found.");
+      if (!item.active) throw new Error("Inventory item is inactive.");
+      const decreases =
+        input.type === "kitchen_issue" ||
+        input.type === "waste" ||
+        input.type === "adjustment";
+      const delta =
+        input.type === "adjustment"
+          ? (input.adjustmentDelta ?? input.quantity)
+          : decreases
+            ? -input.quantity
+            : input.quantity;
+      const next = item.currentQuantity + delta;
+      if (next < 0)
+        throw new Error(
+          "Only " + item.currentQuantity + " " + item.unit + " is available.",
+        );
+      const createdAt = now();
+      sqlite
+        .prepare(
+          "INSERT INTO stock_movements (id, business_id, inventory_item_id, type, quantity_delta, balance_after, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          randomUUID(),
+          input.businessId,
+          input.itemId,
+          input.type,
+          delta,
+          next,
+          input.reason?.trim() || null,
+          input.createdBy,
+          createdAt,
+        );
+      sqlite
+        .prepare(
+          "UPDATE inventory_items SET current_quantity = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        )
+        .run(next, createdAt, input.itemId, input.businessId);
+      result = mapInventory({ ...item, currentQuantity: next });
+    })();
+    return result;
+  }
+
   function getKitchenSyncLines(orderId: string, businessId: string) {
     const current = sqlite
       .prepare(
@@ -533,5 +785,99 @@ export function createPosService(sqlite: Database.Database) {
     sendOrderToKitchen,
     updateOrderItemNote,
     updateOrderItemQuantity,
+    listInventory,
+    listStockMovements,
+    createInventoryItem,
+    updateInventoryItem,
+    receiveStock: (
+      businessId: string,
+      createdBy: string,
+      itemId: string,
+      quantity: number,
+      reason?: string,
+    ) =>
+      recordStockMovement({
+        businessId,
+        createdBy,
+        itemId,
+        quantity,
+        reason,
+        type: "purchase",
+      }),
+    issueStock: (
+      businessId: string,
+      createdBy: string,
+      itemId: string,
+      quantity: number,
+      reason?: string,
+    ) =>
+      recordStockMovement({
+        businessId,
+        createdBy,
+        itemId,
+        quantity,
+        reason,
+        type: "kitchen_issue",
+      }),
+    recordWaste: (
+      businessId: string,
+      createdBy: string,
+      itemId: string,
+      quantity: number,
+      reason: string,
+    ) =>
+      recordStockMovement({
+        businessId,
+        createdBy,
+        itemId,
+        quantity,
+        reason,
+        type: "waste",
+      }),
+    returnStock: (
+      businessId: string,
+      createdBy: string,
+      itemId: string,
+      quantity: number,
+      reason?: string,
+    ) =>
+      recordStockMovement({
+        businessId,
+        createdBy,
+        itemId,
+        quantity,
+        reason,
+        type: "return",
+      }),
+    adjustStockToCount: (
+      businessId: string,
+      createdBy: string,
+      itemId: string,
+      countedQuantity: number,
+      reason: string,
+    ) => {
+      const item = sqlite
+        .prepare(
+          "SELECT current_quantity AS currentQuantity FROM inventory_items WHERE id = ? AND business_id = ?",
+        )
+        .get(itemId, businessId) as { currentQuantity: number } | undefined;
+      if (!item) throw new Error("Inventory item not found.");
+      const difference = countedQuantity - item.currentQuantity;
+      if (!Number.isSafeInteger(countedQuantity) || countedQuantity < 0)
+        throw new Error(
+          "Counted quantity must be a non-negative whole number.",
+        );
+      if (difference === 0)
+        return listInventory(businessId).find((entry) => entry.id === itemId)!;
+      return recordStockMovement({
+        businessId,
+        createdBy,
+        itemId,
+        quantity: Math.abs(difference),
+        adjustmentDelta: difference,
+        reason,
+        type: "adjustment",
+      });
+    },
   };
 }

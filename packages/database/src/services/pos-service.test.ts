@@ -484,4 +484,74 @@ describe("POS application service", () => {
       paymentStatus: "unpaid",
     });
   });
+
+  it("keeps an auditable inventory ledger through receive, issue, waste, return, and count adjustment", () => {
+    const item = service.createInventoryItem({
+      businessId: business,
+      createdBy: owner,
+      name: "Test Chicken",
+      unit: "g",
+      startingQuantity: 10000,
+      reorderThreshold: 3000,
+    });
+    expect(item.currentQuantity).toBe(10000);
+    expect(service.listStockMovements(item.id, business)).toHaveLength(1);
+    service.receiveStock(business, owner, item.id, 5000, "Purchase");
+    service.issueStock(business, owner, item.id, 2000, "Prep");
+    service.recordWaste(business, owner, item.id, 1000, "Spoiled");
+    service.returnStock(business, owner, item.id, 500, "Unused");
+    const adjusted = service.adjustStockToCount(
+      business,
+      owner,
+      item.id,
+      11000,
+      "Physical count",
+    );
+    expect(adjusted.currentQuantity).toBe(11000);
+    expect(service.listStockMovements(item.id, business)).toHaveLength(6);
+    expect(
+      database.sqlite
+        .prepare(
+          "SELECT SUM(quantity_delta) AS balance FROM stock_movements WHERE inventory_item_id = ?",
+        )
+        .get(item.id),
+    ).toEqual({ balance: 11000 });
+  });
+
+  it("rejects insufficient stock, missing reasons, unsafe unit changes, and preserves history", () => {
+    const item = service.createInventoryItem({
+      businessId: business,
+      createdBy: owner,
+      name: "Test Oil",
+      unit: "ml",
+      startingQuantity: 1000,
+      reorderThreshold: 200,
+    });
+    expect(() => service.issueStock(business, owner, item.id, 1001)).toThrow(
+      "Only 1000 ml",
+    );
+    expect(() => service.recordWaste(business, owner, item.id, 1, "")).toThrow(
+      "reason",
+    );
+    expect(() =>
+      service.updateInventoryItem({
+        businessId: business,
+        id: item.id,
+        name: "Test Oil",
+        unit: "litre",
+        reorderThreshold: 200,
+        active: true,
+      }),
+    ).toThrow("Unit cannot change");
+    const before = service.listStockMovements(item.id, business);
+    service.updateInventoryItem({
+      businessId: business,
+      id: item.id,
+      name: "Archived Oil",
+      unit: "ml",
+      reorderThreshold: 200,
+      active: false,
+    });
+    expect(service.listStockMovements(item.id, business)).toEqual(before);
+  });
 });

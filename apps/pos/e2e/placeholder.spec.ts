@@ -54,3 +54,36 @@ test("renders local seating data", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Tables" })).toBeVisible();
   await expect(page.getByText("T1")).toBeVisible();
 });
+
+test("cashier can receive, issue, and inspect inventory movements", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.removeItem("ate05-pos-browser-preview-v1"),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "Inventory" }).click();
+  await page.getByLabel("Inventory item name").fill("Rice stock");
+  await page.getByLabel("Inventory unit").selectOption("g");
+  await page.getByLabel("Starting quantity").fill("10000");
+  await page.getByLabel("Reorder threshold").fill("2000");
+  await page.getByRole("button", { name: "Create item" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Rice stock · 10000 g" }),
+  ).toBeVisible();
+  await page.getByLabel("Stock action").selectOption("receive");
+  await page.getByLabel("Movement quantity").fill("3000");
+  await page.getByRole("button", { name: "Save movement" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Rice stock · 13000 g" }),
+  ).toBeVisible();
+  await page.getByLabel("Stock action").selectOption("issue");
+  await page.getByLabel("Movement quantity").fill("1000");
+  await page.getByRole("button", { name: "Save movement" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Rice stock · 12000 g" }),
+  ).toBeVisible();
+  await expect(page.getByText(/purchase/).first()).toBeVisible();
+  await expect(page.getByText(/kitchen_issue/).first()).toBeVisible();
+});

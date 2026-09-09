@@ -2,6 +2,9 @@ import { useState } from "react";
 import { Badge, Button, Card } from "@ate05/ui";
 import {
   formatGhs,
+  type InventoryItem,
+  type InventoryUnit,
+  type StockMovement,
   type OpenOrder,
   type RestaurantTable,
   type PosPrinterConfig,
@@ -191,52 +194,265 @@ export function MenuScreen() {
   );
 }
 
-export function InventoryScreen() {
-  const stock = [
-    ["Chicken", "18 kg", "warning"],
-    ["Rice", "42 kg", "success"],
-    ["Cooking Oil", "5 L", "warning"],
-    ["Coke", "64 bottles", "success"],
-    ["Takeaway Packs", "12 packs", "destructive"],
-  ] as const;
+export function InventoryScreen({
+  items,
+  onCreate,
+  onReceive,
+  onIssue,
+  onWaste,
+  onReturn,
+  onAdjust,
+  onHistory,
+  onToggleActive,
+}: {
+  items: InventoryItem[];
+  onCreate: (input: {
+    name: string;
+    unit: InventoryUnit;
+    startingQuantity: number;
+    reorderThreshold: number | null;
+  }) => Promise<void>;
+  onReceive: (id: string, quantity: number, reason?: string) => Promise<void>;
+  onIssue: (id: string, quantity: number, reason?: string) => Promise<void>;
+  onWaste: (id: string, quantity: number, reason: string) => Promise<void>;
+  onReturn: (id: string, quantity: number, reason?: string) => Promise<void>;
+  onAdjust: (id: string, quantity: number, reason: string) => Promise<void>;
+  onHistory: (id: string) => Promise<StockMovement[]>;
+  onToggleActive: (item: InventoryItem) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [unit, setUnit] = useState<InventoryUnit>("kg");
+  const [startingQuantity, setStartingQuantity] = useState("");
+  const [threshold, setThreshold] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [action, setAction] = useState<
+    "receive" | "issue" | "waste" | "return" | "adjust"
+  >("receive");
+  const [quantity, setQuantity] = useState("");
+  const [reason, setReason] = useState("");
+  const [history, setHistory] = useState<StockMovement[]>([]);
+  const selected = items.find(
+    (item) => item.id === (selectedId ?? items[0]?.id),
+  );
+  async function create() {
+    await onCreate({
+      name,
+      unit,
+      startingQuantity: Number(startingQuantity || 0),
+      reorderThreshold: threshold ? Number(threshold) : null,
+    });
+    setName("");
+    setStartingQuantity("");
+    setThreshold("");
+  }
+  async function submitMovement() {
+    if (!selected) return;
+    const value = Number(quantity);
+    if (action === "receive") await onReceive(selected.id, value, reason);
+    if (action === "issue") await onIssue(selected.id, value, reason);
+    if (action === "waste") await onWaste(selected.id, value, reason);
+    if (action === "return") await onReturn(selected.id, value, reason);
+    if (action === "adjust") await onAdjust(selected.id, value, reason);
+    setQuantity("");
+    setReason("");
+    setHistory(await onHistory(selected.id));
+  }
+  async function showHistory(id: string) {
+    setSelectedId(id);
+    setHistory(await onHistory(id));
+  }
   return (
     <div className="space-y-6">
       <ScreenHeader
         title="Inventory"
-        description="Simple stock overview for the current location."
-        action="Add stock item"
+        description="Track stock balances and immutable movement history."
       />
+      <Card className="p-5">
+        <h2 className="font-black">Create inventory item</h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-4">
+          <input
+            aria-label="Inventory item name"
+            className="rounded-md border bg-background px-3 py-2"
+            placeholder="Item name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+          <select
+            aria-label="Inventory unit"
+            className="rounded-md border bg-background px-3 py-2"
+            value={unit}
+            onChange={(event) => setUnit(event.target.value as InventoryUnit)}
+          >
+            {["kg", "g", "litre", "ml", "bottle", "piece", "pack"].map(
+              (value) => (
+                <option key={value}>{value}</option>
+              ),
+            )}
+          </select>
+          <input
+            aria-label="Starting quantity"
+            className="rounded-md border bg-background px-3 py-2"
+            type="number"
+            min="0"
+            step="1"
+            placeholder="Starting quantity"
+            value={startingQuantity}
+            onChange={(event) => setStartingQuantity(event.target.value)}
+          />
+          <input
+            aria-label="Reorder threshold"
+            className="rounded-md border bg-background px-3 py-2"
+            type="number"
+            min="0"
+            step="1"
+            placeholder="Reorder threshold"
+            value={threshold}
+            onChange={(event) => setThreshold(event.target.value)}
+          />
+        </div>
+        <Button
+          className="mt-3"
+          disabled={!name.trim()}
+          onClick={() => void create()}
+        >
+          Create item
+        </Button>
+      </Card>
       <Card className="overflow-hidden">
-        <div className="grid grid-cols-[1fr_1fr_130px] gap-4 border-b bg-muted/50 px-5 py-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+        <div className="grid grid-cols-[1.4fr_1fr_1fr_130px] gap-4 border-b bg-muted/50 px-5 py-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">
           <span>Item</span>
-          <span>On hand</span>
+          <span>Current</span>
+          <span>Reorder at</span>
           <span>Status</span>
         </div>
-        {stock.map(([name, amount, state]) => (
-          <div
-            className="grid grid-cols-[1fr_1fr_130px] gap-4 border-b px-5 py-4 last:border-0"
-            key={name}
+        {items.map((item) => (
+          <button
+            type="button"
+            key={item.id}
+            onClick={() => void showHistory(item.id)}
+            className="grid w-full grid-cols-[1.4fr_1fr_1fr_130px] gap-4 border-b px-5 py-4 text-left last:border-0 hover:bg-muted/40"
           >
-            <span className="font-bold">{name}</span>
-            <span className="text-muted-foreground">{amount}</span>
+            <span className="font-bold">{item.name}</span>
+            <span>
+              {item.currentQuantity} {item.unit}
+            </span>
+            <span className="text-muted-foreground">
+              {item.reorderThreshold ?? "—"}{" "}
+              {item.reorderThreshold === null ? "" : item.unit}
+            </span>
             <Badge
               tone={
-                state === "success"
+                item.stockState === "in_stock"
                   ? "success"
-                  : state === "warning"
+                  : item.stockState === "low_stock"
                     ? "warning"
                     : "destructive"
               }
             >
-              {state === "success"
+              {item.stockState === "in_stock"
                 ? "In stock"
-                : state === "warning"
+                : item.stockState === "low_stock"
                   ? "Low stock"
-                  : "Reorder"}
+                  : "Out of stock"}
             </Badge>
-          </div>
+          </button>
         ))}
+        {!items.length ? (
+          <p className="p-5 text-sm text-muted-foreground">
+            No inventory items yet.
+          </p>
+        ) : null}
       </Card>
+      {selected ? (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Card className="p-5">
+            <h2 className="font-black">
+              {selected.name} · {selected.currentQuantity} {selected.unit}
+            </h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <select
+                aria-label="Stock action"
+                className="rounded-md border bg-background px-3 py-2"
+                value={action}
+                onChange={(event) =>
+                  setAction(event.target.value as typeof action)
+                }
+              >
+                <option value="receive">Receive stock</option>
+                <option value="issue">Issue to kitchen</option>
+                <option value="waste">Record waste</option>
+                <option value="return">Return stock</option>
+                <option value="adjust">Adjust to counted quantity</option>
+              </select>
+              <input
+                aria-label="Movement quantity"
+                className="rounded-md border bg-background px-3 py-2"
+                type="number"
+                min="0"
+                step="1"
+                placeholder={
+                  action === "adjust" ? "Counted quantity" : "Quantity"
+                }
+                value={quantity}
+                onChange={(event) => setQuantity(event.target.value)}
+              />
+            </div>
+            <input
+              aria-label="Movement reason"
+              className="mt-3 w-full rounded-md border bg-background px-3 py-2"
+              placeholder={
+                action === "waste" || action === "adjust"
+                  ? "Reason (required)"
+                  : "Reference or note"
+              }
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+            <Button
+              className="mt-3"
+              disabled={
+                !quantity ||
+                ((action === "waste" || action === "adjust") && !reason.trim())
+              }
+              onClick={() => void submitMovement()}
+            >
+              Save movement
+            </Button>
+            <Button
+              className="ml-2 mt-3"
+              variant="secondary"
+              onClick={() => void onToggleActive(selected)}
+            >
+              {selected.active ? "Deactivate item" : "Activate item"}
+            </Button>
+          </Card>
+          <Card className="p-5">
+            <h2 className="font-black">Movement history</h2>
+            <div className="mt-3 space-y-2 text-sm">
+              {history.map((movement) => (
+                <div
+                  key={movement.id}
+                  className="flex justify-between border-b pb-2"
+                >
+                  <span>
+                    {new Date(movement.createdAt).toLocaleString()} ·{" "}
+                    {movement.type}
+                  </span>
+                  <span className="font-bold">
+                    {movement.quantityDelta > 0 ? "+" : ""}
+                    {movement.quantityDelta} {selected.unit}
+                  </span>
+                </div>
+              ))}
+              {!history.length ? (
+                <p className="text-muted-foreground">
+                  Select the item to load history.
+                </p>
+              ) : null}
+            </div>
+          </Card>
+        </div>
+      ) : null}
     </div>
   );
 }

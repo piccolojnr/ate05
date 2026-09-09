@@ -15,6 +15,30 @@ export interface MenuItem {
   sellingPriceMinor: number;
 }
 
+export type InventoryUnit =
+  "kg" | "g" | "litre" | "ml" | "bottle" | "piece" | "pack";
+export type StockMovementType =
+  "purchase" | "kitchen_issue" | "waste" | "return" | "adjustment";
+export interface InventoryItem {
+  id: string;
+  name: string;
+  unit: InventoryUnit;
+  currentQuantity: number;
+  reorderThreshold: number | null;
+  active: boolean;
+  stockState: "in_stock" | "low_stock" | "out_of_stock";
+}
+export interface StockMovement {
+  id: string;
+  inventoryItemId: string;
+  type: StockMovementType;
+  quantityDelta: number;
+  balanceAfter: number;
+  reason: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
 export interface RestaurantTable {
   id: string;
   name: string;
@@ -109,6 +133,7 @@ export interface PosBootstrap {
   items: MenuItem[];
   tables: RestaurantTable[];
   openOrders: OpenOrder[];
+  inventory: InventoryItem[];
 }
 
 export interface PosClient {
@@ -158,6 +183,47 @@ export interface PosClient {
   listReceipts(): Promise<PosReceipt[]>;
   retryPendingReceiptPrints(): Promise<PosOrder[]>;
   reprintReceipt(orderId: string): Promise<void>;
+  listInventory(): Promise<InventoryItem[]>;
+  getInventoryItem(itemId: string): Promise<InventoryItem>;
+  listStockMovements(itemId: string): Promise<StockMovement[]>;
+  createInventoryItem(input: {
+    name: string;
+    unit: InventoryUnit;
+    startingQuantity: number;
+    reorderThreshold: number | null;
+  }): Promise<InventoryItem>;
+  updateInventoryItem(input: {
+    id: string;
+    name: string;
+    unit: InventoryUnit;
+    reorderThreshold: number | null;
+    active: boolean;
+  }): Promise<InventoryItem>;
+  receiveStock(
+    itemId: string,
+    quantity: number,
+    reason?: string,
+  ): Promise<InventoryItem>;
+  issueStock(
+    itemId: string,
+    quantity: number,
+    reason?: string,
+  ): Promise<InventoryItem>;
+  recordWaste(
+    itemId: string,
+    quantity: number,
+    reason: string,
+  ): Promise<InventoryItem>;
+  returnStock(
+    itemId: string,
+    quantity: number,
+    reason?: string,
+  ): Promise<InventoryItem>;
+  adjustStockToCount(
+    itemId: string,
+    countedQuantity: number,
+    reason: string,
+  ): Promise<InventoryItem>;
 }
 
 export function formatGhs(minor: number): string {

@@ -220,6 +220,21 @@ export function App() {
     if (current) setOrder(current);
     await refresh();
   }
+  async function refreshInventory() {
+    if (!bootstrap) return;
+    setBootstrap({ ...bootstrap, inventory: await client.listInventory() });
+  }
+  async function inventoryAction(action: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await action();
+      await refreshInventory();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to update inventory.",
+      );
+    }
+  }
   const content =
     activeScreen === "POS" ? (
       <div className="flex h-full min-h-0 gap-6">
@@ -264,7 +279,43 @@ export function App() {
           <TablesScreen tables={bootstrap?.tables ?? []} />
         )}
         {activeScreen === "Menu" && <MenuScreen />}
-        {activeScreen === "Inventory" && <InventoryScreen />}
+        {activeScreen === "Inventory" && (
+          <InventoryScreen
+            items={bootstrap?.inventory ?? []}
+            onCreate={(input) =>
+              inventoryAction(() => client.createInventoryItem(input))
+            }
+            onReceive={(id, quantity, reason) =>
+              inventoryAction(() => client.receiveStock(id, quantity, reason))
+            }
+            onIssue={(id, quantity, reason) =>
+              inventoryAction(() => client.issueStock(id, quantity, reason))
+            }
+            onWaste={(id, quantity, reason) =>
+              inventoryAction(() => client.recordWaste(id, quantity, reason))
+            }
+            onReturn={(id, quantity, reason) =>
+              inventoryAction(() => client.returnStock(id, quantity, reason))
+            }
+            onAdjust={(id, quantity, reason) =>
+              inventoryAction(() =>
+                client.adjustStockToCount(id, quantity, reason),
+              )
+            }
+            onHistory={(id) => client.listStockMovements(id)}
+            onToggleActive={(item) =>
+              inventoryAction(() =>
+                client.updateInventoryItem({
+                  id: item.id,
+                  name: item.name,
+                  unit: item.unit,
+                  reorderThreshold: item.reorderThreshold,
+                  active: !item.active,
+                }),
+              )
+            }
+          />
+        )}
         {activeScreen === "Settings" && (
           <SettingsScreen
             key={

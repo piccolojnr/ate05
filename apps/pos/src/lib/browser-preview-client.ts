@@ -1,5 +1,6 @@
 import type {
   KitchenTicket,
+  InventoryItem,
   MenuCategory,
   MenuItem,
   PosBootstrap,
@@ -8,6 +9,7 @@ import type {
   PosPayment,
   PosPrinterConfig,
   RestaurantTable,
+  StockMovement,
 } from "./pos-client";
 import type { PaperWidth } from "@ate05/printing";
 import { calculateKitchenDeltas, type KitchenSyncLine } from "@ate05/domain";
@@ -21,6 +23,8 @@ interface PreviewState {
   nextReceiptNumber: number;
   orders: PosOrder[];
   printers: PosPrinterConfig[];
+  inventory: InventoryItem[];
+  movements: StockMovement[];
 }
 
 const categories: MenuCategory[] = [
@@ -69,9 +73,18 @@ function readState(): PreviewState {
   const raw = window.localStorage.getItem(storageKey);
   const state = raw
     ? (JSON.parse(raw) as PreviewState)
-    : { nextOrderNumber: 1, nextReceiptNumber: 1, orders: [], printers: [] };
+    : {
+        nextOrderNumber: 1,
+        nextReceiptNumber: 1,
+        orders: [],
+        printers: [],
+        inventory: [],
+        movements: [],
+      };
   state.nextReceiptNumber ??= 1;
   state.printers ??= [];
+  state.inventory ??= [];
+  state.movements ??= [];
   for (const order of state.orders) {
     order.amountPaidMinor ??=
       order.receipt?.payments.reduce(
@@ -92,6 +105,20 @@ function readState(): PreviewState {
     order.kitchenChangesPending ??= false;
   }
   return state;
+}
+function inventoryState(
+  quantity: number,
+  threshold: number | null,
+): InventoryItem["stockState"] {
+  if (quantity === 0) return "out_of_stock";
+  if (threshold !== null && quantity <= threshold) return "low_stock";
+  return "in_stock";
+}
+function refreshInventory(item: InventoryItem): InventoryItem {
+  return {
+    ...item,
+    stockState: inventoryState(item.currentQuantity, item.reorderThreshold),
+  };
 }
 function writeState(state: PreviewState): void {
   window.localStorage.setItem(storageKey, JSON.stringify(state));
@@ -175,6 +202,37 @@ function updateKitchenPending(order: PosOrder): PosOrder {
 
 /** Browser-only preview adapter. Desktop uses the explicit Tauri command client. */
 export function createBrowserPreviewClient(): PosClient {
+  function applyMovement(
+    state: PreviewState,
+    itemId: string,
+    type: StockMovement["type"],
+    delta: number,
+    reason: string | null,
+  ): InventoryItem {
+    const item = state.inventory.find((entry) => entry.id === itemId);
+    if (!item) throw new Error("Inventory item not found.");
+    if (!item.active) throw new Error("Inventory item is inactive.");
+    const next = item.currentQuantity + delta;
+    if (next < 0)
+      throw new Error(
+        "Only " + item.currentQuantity + " " + item.unit + " is available.",
+      );
+    if ((type === "waste" || type === "adjustment") && !reason?.trim())
+      throw new Error("A reason is required for this movement.");
+    const movement: StockMovement = {
+      id: crypto.randomUUID(),
+      inventoryItemId: itemId,
+      type,
+      quantityDelta: delta,
+      balanceAfter: next,
+      reason: reason?.trim() || null,
+      createdBy,
+      createdAt: new Date().toISOString(),
+    };
+    item.currentQuantity = next;
+    state.movements.unshift(movement);
+    return refreshInventory(item);
+  }
   return {
     async bootstrap(): Promise<PosBootstrap> {
       const state = readState();
@@ -216,6 +274,7 @@ export function createBrowserPreviewClient(): PosClient {
             receipt: order.receipt,
             openedAt: order.openedAt,
           })),
+        inventory: state.inventory.map(refreshInventory),
       };
     },
     async addMenuItem(input) {
@@ -512,6 +571,139 @@ export function createBrowserPreviewClient(): PosClient {
         entry.id === order.id ? order : entry,
       );
       writeState(state);
+    },
+    async listInventory() {
+      return readState().inventory.map(refreshInventory);
+    },
+    async getInventoryItem(itemId) {
+      const item = readState().inventory.find((entry) => entry.id === itemId);
+      if (!item) throw new Error("Inventory item not found.");
+      return refreshInventory(item);
+    },
+    async listStockMovements(itemId) {
+      return readState().movements.filter(
+        (movement) => movement.inventoryItemId === itemId,
+      );
+    },
+    async createInventoryItem(input) {
+      const state = readState();
+      if (!input.name.trim())
+        throw new Error("Inventory item name is required.");
+      if (
+        !Number.isSafeInteger(input.startingQuantity) ||
+        input.startingQuantity < 0
+      )
+        throw new Error(
+          "Starting quantity must be a non-negative whole number.",
+        );
+      const item: InventoryItem = {
+        id: crypto.randomUUID(),
+        name: input.name.trim(),
+        unit: input.unit,
+        currentQuantity: 0,
+        reorderThreshold: input.reorderThreshold,
+        active: true,
+        stockState: "out_of_stock",
+      };
+      state.inventory.push(item);
+      if (input.startingQuantity > 0)
+        applyMovement(
+          state,
+          item.id,
+          "purchase",
+          input.startingQuantity,
+          "Opening balance",
+        );
+      writeState(state);
+      return refreshInventory(item);
+    },
+    async updateInventoryItem(input) {
+      const state = readState();
+      const item = state.inventory.find((entry) => entry.id === input.id);
+      if (!item) throw new Error("Inventory item not found.");
+      if (
+        item.unit !== input.unit &&
+        state.movements.some((movement) => movement.inventoryItemId === item.id)
+      )
+        throw new Error(
+          "Unit cannot change after stock movement history exists.",
+        );
+      item.name = input.name.trim();
+      item.unit = input.unit;
+      item.reorderThreshold = input.reorderThreshold;
+      item.active = input.active;
+      writeState(state);
+      return refreshInventory(item);
+    },
+    async receiveStock(itemId, quantity, reason) {
+      const state = readState();
+      if (!Number.isSafeInteger(quantity) || quantity <= 0)
+        throw new Error("Quantity must be a positive whole number.");
+      const item = applyMovement(
+        state,
+        itemId,
+        "purchase",
+        quantity,
+        reason ?? null,
+      );
+      writeState(state);
+      return item;
+    },
+    async issueStock(itemId, quantity, reason) {
+      const state = readState();
+      if (!Number.isSafeInteger(quantity) || quantity <= 0)
+        throw new Error("Quantity must be a positive whole number.");
+      const item = applyMovement(
+        state,
+        itemId,
+        "kitchen_issue",
+        -quantity,
+        reason ?? null,
+      );
+      writeState(state);
+      return item;
+    },
+    async recordWaste(itemId, quantity, reason) {
+      const state = readState();
+      if (!Number.isSafeInteger(quantity) || quantity <= 0)
+        throw new Error("Quantity must be a positive whole number.");
+      const item = applyMovement(state, itemId, "waste", -quantity, reason);
+      writeState(state);
+      return item;
+    },
+    async returnStock(itemId, quantity, reason) {
+      const state = readState();
+      if (!Number.isSafeInteger(quantity) || quantity <= 0)
+        throw new Error("Quantity must be a positive whole number.");
+      const item = applyMovement(
+        state,
+        itemId,
+        "return",
+        quantity,
+        reason ?? null,
+      );
+      writeState(state);
+      return item;
+    },
+    async adjustStockToCount(itemId, countedQuantity, reason) {
+      const state = readState();
+      if (!Number.isSafeInteger(countedQuantity) || countedQuantity < 0)
+        throw new Error(
+          "Counted quantity must be a non-negative whole number.",
+        );
+      const item = state.inventory.find((entry) => entry.id === itemId);
+      if (!item) throw new Error("Inventory item not found.");
+      const difference = countedQuantity - item.currentQuantity;
+      if (difference === 0) return refreshInventory(item);
+      const result = applyMovement(
+        state,
+        itemId,
+        "adjustment",
+        difference,
+        reason,
+      );
+      writeState(state);
+      return result;
     },
   };
 }

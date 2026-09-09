@@ -171,5 +171,24 @@ export function seedDevelopmentData(sqlite: Database.Database): void {
       seededAt,
       seededAt,
     );
+    const insertOpeningMovement = sqlite.prepare(
+      "INSERT OR IGNORE INTO stock_movements (id, business_id, inventory_item_id, type, quantity_delta, balance_after, reason, created_by, created_at) VALUES (?, ?, ?, 'purchase', ?, ?, 'Opening balance', ?, ?)",
+    );
+    for (const [itemId, quantity, movementId] of [
+      [ids.chicken, 30000, "00000000-0000-4000-8000-000000000050"],
+      [ids.rice, 50000, "00000000-0000-4000-8000-000000000051"],
+      [ids.cookingOil, 10000, "00000000-0000-4000-8000-000000000052"],
+      [ids.cokeStock, 48, "00000000-0000-4000-8000-000000000053"],
+      [ids.takeawayPacks, 100, "00000000-0000-4000-8000-000000000054"],
+    ] as const)
+      insertOpeningMovement.run(
+        movementId,
+        ids.business,
+        itemId,
+        quantity,
+        quantity,
+        ids.owner,
+        seededAt,
+      );
   })();
 }
