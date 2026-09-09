@@ -15,6 +15,7 @@
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
+    "@ate05/domain": "workspace:*",
     "better-sqlite3": "^12.4.0",
     "drizzle-orm": "^0.44.0"
   },

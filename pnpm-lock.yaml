@@ -208,6 +208,9 @@ importers:
 
   packages/database:
     dependencies:
+      '@ate05/domain':
+        specifier: workspace:*
+        version: link:../domain
       better-sqlite3:
         specifier: ^12.4.0
         version: 12.11.1

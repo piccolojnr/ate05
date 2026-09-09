@@ -7,6 +7,7 @@ import * as schema from "./schema";
 export * from "./schema";
 export { createMenuRepository } from "./repositories";
 export { developmentSeedIds, seedDevelopmentData } from "./seed";
+export * from "./services";
 
 export function createDatabase(filename = ":memory:") {
   const sqlite = new Database(filename);

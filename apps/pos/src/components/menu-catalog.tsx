@@ -1,20 +1,42 @@
 import { Button, Card, cn } from "@ate05/ui";
 import { Input } from "@/components/ui/input";
-import { categories, menuItems } from "../data";
+import {
+  formatGhs,
+  type MenuCategory,
+  type MenuItem,
+  type OrderType,
+  type RestaurantTable,
+} from "../lib/pos-client";
 
 export function MenuCatalog({
   category,
   onCategoryChange,
   onAdd,
+  categories,
+  items,
+  orderType,
+  onOrderTypeChange,
+  tableId,
+  tables,
+  onTableChange,
+  orderNumber,
 }: {
   category: string;
   onCategoryChange: (category: string) => void;
   onAdd: (id: string) => void;
+  categories: MenuCategory[];
+  items: MenuItem[];
+  orderType: OrderType;
+  onOrderTypeChange: (type: OrderType) => void;
+  tableId: string | null;
+  tables: RestaurantTable[];
+  onTableChange: (tableId: string) => void;
+  orderNumber?: number;
 }) {
   const visibleItems =
     category === "All"
-      ? menuItems
-      : menuItems.filter((item) => item.category === category);
+      ? items
+      : items.filter((item) => item.categoryId === category);
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-5">
       <header className="flex items-end justify-between gap-4">
@@ -22,7 +44,11 @@ export function MenuCatalog({
           <p className="text-sm font-semibold text-primary">
             Counter 01 · Open
           </p>
-          <h1 className="mt-1 text-2xl font-black tracking-tight">New order</h1>
+          <h1 className="mt-1 text-2xl font-black tracking-tight">
+            {orderNumber
+              ? `Order #${String(orderNumber).padStart(4, "0")}`
+              : "New order"}
+          </h1>
         </div>
         <p className="hidden text-sm text-muted-foreground sm:block">
           Tuesday · 12:42 PM
@@ -30,46 +56,73 @@ export function MenuCatalog({
       </header>
       <Card className="grid gap-4 p-4 shadow-none xl:grid-cols-[1fr_auto]">
         <div className="flex flex-wrap items-center gap-2">
-          <strong className="mr-2 text-lg">#A05021</strong>
-          <Button>Dine-in</Button>
-          <Button variant="secondary">Takeaway</Button>
+          <strong className="mr-2 text-lg">
+            {orderNumber ? `#${orderNumber}` : "Draft"}
+          </strong>
+          <Button
+            onClick={() => onOrderTypeChange("dine_in")}
+            variant={orderType === "dine_in" ? "primary" : "secondary"}
+          >
+            Dine-in
+          </Button>
+          <Button
+            onClick={() => onOrderTypeChange("takeaway")}
+            variant={orderType === "takeaway" ? "primary" : "secondary"}
+          >
+            Takeaway
+          </Button>
           <Input
             aria-label="Customer name"
             className="h-10 min-w-[190px] flex-1 bg-card text-sm focus-visible:ring-2 focus-visible:ring-primary"
             placeholder="Customer (optional)"
           />
         </div>
-        <div className="grid grid-cols-4 gap-2">
-          {["T01", "T02", "T03", "T04"].map((table) => (
-            <Button
-              className={cn(
-                "min-w-12",
-                table === "T04" && "!border-primary !bg-primary !text-white",
-              )}
-              key={table}
-              size="sm"
-              variant="secondary"
-            >
-              {table}
-            </Button>
-          ))}
-        </div>
+        {orderType === "dine_in" ? (
+          <div className="grid grid-cols-4 gap-2">
+            {tables.map((table) => (
+              <Button
+                className={cn(
+                  "min-w-12",
+                  tableId === table.id &&
+                    "!border-primary !bg-primary !text-white",
+                )}
+                key={table.id}
+                size="sm"
+                variant="secondary"
+                disabled={table.status === "occupied"}
+                onClick={() => onTableChange(table.id)}
+              >
+                {table.name.replace("Table ", "T")}
+              </Button>
+            ))}
+          </div>
+        ) : null}
       </Card>
       <Card className="min-h-0 flex-1 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2" aria-label="Menu categories">
+            <Button
+              variant="secondary"
+              size="sm"
+              className={cn(
+                category === "All" && "!border-primary !bg-primary !text-white",
+              )}
+              onClick={() => onCategoryChange("All")}
+            >
+              All
+            </Button>
             {categories.map((item) => (
               <Button
-                key={item}
+                key={item.id}
                 variant="secondary"
                 size="sm"
                 className={cn(
-                  category === item &&
+                  category === item.id &&
                     "!border-primary !bg-primary !text-white",
                 )}
-                onClick={() => onCategoryChange(item)}
+                onClick={() => onCategoryChange(item.id)}
               >
-                {item}
+                {item.name}
               </Button>
             ))}
           </div>
@@ -91,11 +144,15 @@ export function MenuCatalog({
               <div
                 className={cn(
                   "flex h-24 items-end justify-between p-3",
-                  item.color,
+                  "bg-primary/10",
                 )}
               >
                 <span className="rounded-full bg-card/80 px-2.5 py-1 text-xs font-bold text-foreground">
-                  {item.category}
+                  {
+                    categories.find(
+                      (category) => category.id === item.categoryId,
+                    )?.name
+                  }
                 </span>
                 <span className="text-xl font-black text-foreground/60">
                   GH₵
@@ -105,7 +162,7 @@ export function MenuCatalog({
                 <div className="flex items-start justify-between gap-2">
                   <p className="font-bold leading-tight">{item.name}</p>
                   <p className="shrink-0 text-sm font-black text-primary">
-                    {item.price.toFixed(2)}
+                    {formatGhs(item.sellingPriceMinor).replace("GHS ", "")}
                   </p>
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">

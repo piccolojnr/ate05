@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge, Button, cn } from "@ate05/ui";
 import { Icon } from "./components/icons";
 import { MenuCatalog } from "./components/menu-catalog";
-import { OrderPanel, type OrderLine } from "./components/order-panel";
+import { OrderPanel } from "./components/order-panel";
 import { Sidebar } from "./components/sidebar";
-import { categories, menuItems, type NavigationItem } from "./data";
+import { type NavigationItem } from "./data";
+import { getPosClient } from "./lib/get-pos-client";
+import type { OpenOrder, PosBootstrap, PosOrder } from "./lib/pos-client";
 import {
   InventoryScreen,
   MenuScreen,
@@ -13,47 +15,91 @@ import {
   TablesScreen,
 } from "./screens/placeholders";
 
-const starterLines: OrderLine[] = [
-  { id: "jollof", name: "Assorted Jollof Rice", price: 59.99, quantity: 1 },
-  { id: "chicken", name: "Fried Chicken", price: 25, quantity: 1 },
-  { id: "coke", name: "Tropical Sunset", price: 60, quantity: 1 },
-];
+const client = getPosClient();
 
 export function App() {
   const [activeScreen, setActiveScreen] = useState<NavigationItem>("POS");
-  const [category, setCategory] = useState(categories[0] ?? "All");
-  const [lines, setLines] = useState<OrderLine[]>(starterLines);
+  const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(null);
+  const [order, setOrder] = useState<PosOrder | null>(null);
+  const [category, setCategory] = useState("All");
+  const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
+  const [tableId, setTableId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const itemCount = useMemo(
-    () => lines.reduce((total, line) => total + line.quantity, 0),
-    [lines],
+    () => order?.items.reduce((total, line) => total + line.quantity, 0) ?? 0,
+    [order],
   );
-  function addItem(id: string) {
-    const item = menuItems.find((menuItem) => menuItem.id === id);
-    if (!item) return;
-    setLines((current) => {
-      const line = current.find((entry) => entry.id === item.id);
-      return line
-        ? current.map((entry) =>
-            entry.id === item.id
-              ? { ...entry, quantity: entry.quantity + 1 }
-              : entry,
-          )
-        : [
-            ...current,
-            { id: item.id, name: item.name, price: item.price, quantity: 1 },
-          ];
-    });
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      setBootstrap(await client.bootstrap());
+      setError(null);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to load local restaurant data.",
+      );
+    } finally {
+      setLoading(false);
+    }
   }
-  function changeQuantity(id: string, amount: number) {
-    setLines((current) =>
-      current.flatMap((line) =>
-        line.id !== id
-          ? [line]
-          : line.quantity + amount > 0
-            ? [{ ...line, quantity: line.quantity + amount }]
-            : [],
-      ),
-    );
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refresh(), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+  async function addItem(menuItemId: string) {
+    try {
+      const updated = await client.addMenuItem({
+        orderId: order?.id,
+        menuItemId,
+        orderType,
+        tableId,
+      });
+      setOrder(updated);
+      await refresh();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to add this item.",
+      );
+    }
+  }
+  async function changeQuantity(itemId: string, quantity: number) {
+    if (!order) return;
+    try {
+      setOrder(
+        await client.updateOrderItemQuantity(order.id, itemId, quantity),
+      );
+      await refresh();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to update this item.",
+      );
+    }
+  }
+  async function changeNote(itemId: string, notes: string) {
+    if (!order) return;
+    try {
+      setOrder(await client.updateOrderItemNote(order.id, itemId, notes));
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to save this note.",
+      );
+    }
+  }
+  async function openOrder(summary: OpenOrder) {
+    try {
+      setOrder(await client.getOrder(summary.id));
+      setOrderType(summary.orderType);
+      setTableId(summary.tableId);
+      setActiveScreen("POS");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to reopen this order.",
+      );
+    }
   }
   const content =
     activeScreen === "POS" ? (
@@ -62,13 +108,37 @@ export function App() {
           category={category}
           onCategoryChange={setCategory}
           onAdd={addItem}
+          categories={bootstrap?.categories ?? []}
+          items={bootstrap?.items ?? []}
+          orderType={order?.orderType ?? orderType}
+          onOrderTypeChange={(type) => {
+            if (!order) {
+              setOrderType(type);
+              setTableId(null);
+            }
+          }}
+          tableId={order?.tableId ?? tableId}
+          tables={bootstrap?.tables ?? []}
+          onTableChange={setTableId}
+          orderNumber={order?.orderNumber}
         />
-        <OrderPanel lines={lines} onQuantityChange={changeQuantity} />
+        <OrderPanel
+          order={order}
+          onQuantityChange={changeQuantity}
+          onNoteChange={changeNote}
+        />
       </div>
     ) : (
       <div className="mx-auto max-w-6xl">
-        {activeScreen === "Orders" && <OrdersScreen />}
-        {activeScreen === "Tables" && <TablesScreen />}
+        {activeScreen === "Orders" && (
+          <OrdersScreen
+            orders={bootstrap?.openOrders ?? []}
+            onOpenOrder={openOrder}
+          />
+        )}
+        {activeScreen === "Tables" && (
+          <TablesScreen tables={bootstrap?.tables ?? []} />
+        )}
         {activeScreen === "Menu" && <MenuScreen />}
         {activeScreen === "Inventory" && <InventoryScreen />}
         {activeScreen === "Settings" && <SettingsScreen />}
@@ -117,6 +187,19 @@ export function App() {
           <div className="mb-3 flex items-center gap-2 lg:hidden">
             <Badge tone="primary">{itemCount} items in current order</Badge>
           </div>
+          {loading ? (
+            <p className="mb-3 text-sm text-muted-foreground">
+              Loading local restaurant data…
+            </p>
+          ) : null}
+          {error ? (
+            <p
+              role="alert"
+              className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              {error}
+            </p>
+          ) : null}
           {content}
         </div>
       </div>

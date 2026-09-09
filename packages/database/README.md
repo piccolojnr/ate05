@@ -26,3 +26,7 @@ This package owns ATE05's local SQLite persistence: the Drizzle schema, checked-
 - create order + item snapshots + assign local order number
 
 The development seed is deliberately explicit: call `seedDevelopmentData` only in local development/test setup after `initializeDatabase`.
+
+## POS operations
+
+`createPosService(sqlite)` provides the small application-service surface used by a native POS bridge: menu/table reads, first-item order creation, open-order reads, item quantity changes, notes, and totals. It is deliberately not a generic repository framework. The first menu item creates the order inside the same transaction, preventing abandoned empty orders. Reopening an order always reads the persisted order-item snapshots rather than current menu prices.

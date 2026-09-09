@@ -1,4 +1,9 @@
 import { Badge, Button, Card } from "@ate05/ui";
+import {
+  formatGhs,
+  type OpenOrder,
+  type RestaurantTable,
+} from "../lib/pos-client";
 
 function ScreenHeader({
   title,
@@ -21,45 +26,13 @@ function ScreenHeader({
   );
 }
 
-const statuses = [
-  {
-    id: "#A-1042",
-    guest: "Table 06 · 2 guests",
-    status: "Preparing",
-    tone: "warning" as const,
-    total: "GHS 172.00",
-  },
-  {
-    id: "#A-1041",
-    guest: "Takeaway · Ama K.",
-    status: "Ready",
-    tone: "success" as const,
-    total: "GHS 55.00",
-  },
-  {
-    id: "#A-1040",
-    guest: "Table 02 · 4 guests",
-    status: "Completed",
-    tone: "neutral" as const,
-    total: "GHS 231.00",
-  },
-  {
-    id: "#A-1039",
-    guest: "Table 09 · 3 guests",
-    status: "Paid",
-    tone: "primary" as const,
-    total: "GHS 106.00",
-  },
-  {
-    id: "#A-1038",
-    guest: "Walk-in · Joseph A.",
-    status: "Unpaid",
-    tone: "destructive" as const,
-    total: "GHS 84.00",
-  },
-];
-
-export function OrdersScreen() {
+export function OrdersScreen({
+  orders,
+  onOpenOrder,
+}: {
+  orders: OpenOrder[];
+  onOpenOrder: (order: OpenOrder) => void;
+}) {
   return (
     <div className="space-y-6">
       <ScreenHeader
@@ -74,18 +47,25 @@ export function OrdersScreen() {
           <span>Status</span>
           <span className="text-right">Total</span>
         </div>
-        {statuses.map((order) => (
+        {orders.map((order) => (
           <button
             type="button"
             key={order.id}
             className="grid w-full grid-cols-[1fr_1.5fr_1fr_1fr] gap-4 border-b px-5 py-4 text-left transition-colors last:border-0 hover:bg-muted/40"
+            onClick={() => onOpenOrder(order)}
           >
-            <span className="font-black">{order.id}</span>
-            <span className="text-sm text-muted-foreground">{order.guest}</span>
-            <span>
-              <Badge tone={order.tone}>{order.status}</Badge>
+            <span className="font-black">
+              #{String(order.orderNumber).padStart(4, "0")}
             </span>
-            <span className="text-right font-bold">{order.total}</span>
+            <span className="text-sm text-muted-foreground">
+              {order.tableName ?? "Takeaway"}
+            </span>
+            <span>
+              <Badge tone="primary">{order.status}</Badge>
+            </span>
+            <span className="text-right font-bold">
+              {formatGhs(order.totalMinor)}
+            </span>
           </button>
         ))}
       </Card>
@@ -93,18 +73,7 @@ export function OrdersScreen() {
   );
 }
 
-const tables = [
-  { name: "T01", state: "Available", tone: "success" as const },
-  { name: "T02", state: "Occupied", tone: "destructive" as const },
-  { name: "T03", state: "Reserved", tone: "warning" as const },
-  { name: "T04", state: "Available", tone: "success" as const },
-  { name: "T05", state: "Occupied", tone: "destructive" as const },
-  { name: "T06", state: "Occupied", tone: "destructive" as const },
-  { name: "T07", state: "Available", tone: "success" as const },
-  { name: "T08", state: "Reserved", tone: "warning" as const },
-];
-
-export function TablesScreen() {
+export function TablesScreen({ tables }: { tables: RestaurantTable[] }) {
   return (
     <div className="space-y-6">
       <ScreenHeader
@@ -117,15 +86,25 @@ export function TablesScreen() {
           <Card key={table.name} className="p-5">
             <div className="flex items-start justify-between">
               <span className="grid size-11 place-items-center rounded-full border-4 border-muted text-sm font-black">
-                {table.name}
+                {table.name.replace("Table ", "T")}
               </span>
-              <Badge tone={table.tone}>{table.state}</Badge>
+              <Badge
+                tone={
+                  table.status === "available"
+                    ? "success"
+                    : table.status === "reserved"
+                      ? "warning"
+                      : "destructive"
+                }
+              >
+                {table.status}
+              </Badge>
             </div>
             <p className="mt-6 text-sm font-bold">
-              {table.state === "Occupied"
+              {table.status === "occupied"
                 ? "Order in progress"
-                : table.state === "Reserved"
-                  ? "19:30 booking"
+                : table.status === "reserved"
+                  ? "Reserved"
                   : "Ready for guests"}
             </p>
           </Card>

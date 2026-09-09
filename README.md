@@ -58,4 +58,10 @@ pnpm --filter @ate05/database db:generate
 
 See [`packages/database/README.md`](packages/database/README.md) for numbering, history, and transaction-boundary decisions. Development seed data is separate from normal initialization.
 
+## POS persistence boundary
+
+Operational writes live in `packages/database` as a focused SQLite POS service; React never imports `better-sqlite3` or issues SQL. The desktop renderer calls the typed Tauri client (`apps/pos/src/lib/tauri-client.ts`), which is the explicit place for native command bindings. The normal browser/Vite preview uses a clearly separated local-storage preview adapter so UI development and Playwright can run without a native runtime; it is not the production persistence implementation.
+
+The SQLite service itself is initialized with `initializeDatabase`, then explicitly seeded with `seedDevelopmentData` for local development/tests. This keeps production startup from silently adding demo records.
+
 The repository deliberately has no backend server, cloud API, authentication provider, or microservice. Future kitchen-display, back-office, waiter, and sync applications can reuse `domain`, `database`, `validation`, and `ui` without putting business rules in the POS shell.
