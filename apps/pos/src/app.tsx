@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Button, cn } from "@ate05/ui";
-import { Icon } from "./components/icons";
+import { Badge } from "@ate05/ui";
+import { AppShell } from "./components/app-shell";
 import { MenuCatalog } from "./components/menu-catalog";
 import { OrderPanel } from "./components/order-panel";
-import { Sidebar } from "./components/sidebar";
 import { type NavigationItem } from "./data";
 import { getPosClient } from "./lib/get-pos-client";
 import type {
@@ -332,72 +331,36 @@ export function App() {
       </div>
     );
   return (
-    <main className="flex h-screen min-h-[680px] overflow-hidden bg-background text-foreground">
-      <Sidebar active={activeScreen} onNavigate={setActiveScreen} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="hidden">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-bold text-muted-foreground">
-              Tuesday, 18 June
-            </span>
-            <span className="hidden h-4 border-l sm:block" />
-            <span className="hidden text-sm text-muted-foreground sm:block">
-              12:42 PM
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button size="icon" variant="ghost" aria-label="Search">
-              <Icon name="search" />
-            </Button>
-            <button
-              type="button"
-              className="flex items-center gap-2 rounded-md p-1 pr-3 hover:bg-muted"
-            >
-              <span className="grid size-9 place-items-center rounded-full bg-slate-800 text-xs font-black text-white">
-                RA
-              </span>
-              <span className="hidden text-left sm:block">
-                <span className="block text-sm font-bold">Rahim A.</span>
-                <span className="block text-xs text-muted-foreground">
-                  Cashier
-                </span>
-              </span>
-            </button>
-          </div>
-        </header>
-        <div
-          className={cn(
-            "min-h-0 flex-1 overflow-auto",
-            activeScreen === "POS" ? "p-6" : "p-8",
-          )}
-        >
-          <div className="mb-3 flex items-center gap-2 lg:hidden">
-            <Badge tone="primary">{itemCount} items in current order</Badge>
-          </div>
-          {loading ? (
-            <p className="mb-3 text-sm text-muted-foreground">
-              Loading local restaurant data…
-            </p>
-          ) : null}
-          {error ? (
-            <p
-              role="alert"
-              className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-            >
-              {error}
-            </p>
-          ) : null}
-          {notice ? (
-            <p
-              role="status"
-              className="mb-3 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success"
-            >
-              {notice}
-            </p>
-          ) : null}
-          {content}
+    <AppShell active={activeScreen} onNavigate={setActiveScreen}>
+      <div
+        className={`min-h-0 flex-1 overflow-auto ${activeScreen === "POS" ? "p-6" : "p-8"}`}
+      >
+        <div className="mb-3 flex items-center gap-2 lg:hidden">
+          <Badge tone="primary">{itemCount} items in current order</Badge>
         </div>
+        {loading ? (
+          <p className="mb-3 text-sm text-muted-foreground">
+            Loading local restaurant data…
+          </p>
+        ) : null}
+        {error ? (
+          <p
+            role="alert"
+            className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {error}
+          </p>
+        ) : null}
+        {notice ? (
+          <p
+            role="status"
+            className="mb-3 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success"
+          >
+            {notice}
+          </p>
+        ) : null}
+        {content}
       </div>
-    </main>
+    </AppShell>
   );
 }

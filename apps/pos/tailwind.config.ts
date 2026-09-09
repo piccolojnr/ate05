@@ -23,6 +23,15 @@ export default {
         destructive: "rgb(var(--destructive) / <alpha-value>)",
         input: "rgb(var(--input) / <alpha-value>)",
         ring: "rgb(var(--ring) / <alpha-value>)",
+        info: "rgb(var(--info) / <alpha-value>)",
+        nav: "rgb(var(--nav) / <alpha-value>)",
+        "nav-foreground": "rgb(var(--nav-foreground) / <alpha-value>)",
+        "nav-muted": "rgb(var(--nav-muted) / <alpha-value>)",
+        "nav-border": "rgb(var(--nav-border) / <alpha-value>)",
+        "nav-active": "rgb(var(--nav-active) / <alpha-value>)",
+        "nav-active-foreground":
+          "rgb(var(--nav-active-foreground) / <alpha-value>)",
+        "nav-hover": "rgb(var(--nav-hover) / <alpha-value>)",
         secondary: "rgb(var(--secondary) / <alpha-value>)",
         "secondary-foreground":
           "rgb(var(--secondary-foreground) / <alpha-value>)",
@@ -35,8 +44,8 @@ export default {
         sm: "var(--radius-sm)",
       },
       boxShadow: {
-        card: "0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px rgb(15 23 42 / 0.05)",
-        floating: "0 16px 40px rgb(15 23 42 / 0.12)",
+        card: "var(--shadow-card)",
+        floating: "var(--shadow-floating)",
       },
     },
   },

@@ -5,4 +5,6 @@ export type { BadgeProps } from "./components/badge";
 export { Button } from "./components/button";
 export type { ButtonProps } from "./components/button";
 export { Card } from "./components/card";
+export { Input } from "./components/input";
+export type { InputProps } from "./components/input";
 export { cn } from "./lib/cn";

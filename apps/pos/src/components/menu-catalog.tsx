@@ -1,5 +1,4 @@
-import { Button, Card, cn } from "@ate05/ui";
-import { Input } from "@/components/ui/input";
+import { Button, Card, cn, Input } from "@ate05/ui";
 import {
   formatGhs,
   type MenuCategory,

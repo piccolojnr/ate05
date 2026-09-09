@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Badge, Button, Card } from "@ate05/ui";
+import { PageHeader } from "../components/page-header";
+import { StatusBadge } from "../components/status-badge";
 import {
   formatGhs,
   type InventoryItem,
@@ -20,14 +22,11 @@ function ScreenHeader({
   action?: string;
 }) {
   return (
-    <header className="flex items-end justify-between gap-4">
-      <div>
-        <p className="text-sm font-bold text-primary">ATE05 Operations</p>
-        <h1 className="mt-1 text-2xl font-black tracking-tight">{title}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
-      </div>
-      {action ? <Button>{action}</Button> : null}
-    </header>
+    <PageHeader
+      title={title}
+      description={description}
+      action={action ? <Button>{action}</Button> : undefined}
+    />
   );
 }
 
@@ -66,7 +65,7 @@ export function OrdersScreen({
               {order.tableName ?? "Takeaway"}
             </span>
             <span>
-              <Badge tone="primary">{order.status}</Badge>
+              <StatusBadge kind="order" value={order.status} />
             </span>
             <span className="text-right font-bold">
               {formatGhs(order.totalMinor)}
@@ -340,21 +339,7 @@ export function InventoryScreen({
               {item.reorderThreshold ?? "—"}{" "}
               {item.reorderThreshold === null ? "" : item.unit}
             </span>
-            <Badge
-              tone={
-                item.stockState === "in_stock"
-                  ? "success"
-                  : item.stockState === "low_stock"
-                    ? "warning"
-                    : "destructive"
-              }
-            >
-              {item.stockState === "in_stock"
-                ? "In stock"
-                : item.stockState === "low_stock"
-                  ? "Low stock"
-                  : "Out of stock"}
-            </Badge>
+            <StatusBadge kind="inventory" value={item.stockState} />
           </button>
         ))}
         {!items.length ? (

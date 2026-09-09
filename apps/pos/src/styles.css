@@ -17,6 +17,17 @@
     --success: 5 150 105;
     --warning: 217 119 6;
     --destructive: 220 38 38;
+    --info: 37 99 235;
+    --nav: 25 25 24;
+    --nav-foreground: 249 247 242;
+    --nav-muted: 201 201 201;
+    --nav-border: 62 62 60;
+    --nav-active: 217 115 42;
+    --nav-active-foreground: 255 255 255;
+    --nav-hover: 43 43 41;
+    --shadow-card:
+      0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px rgb(15 23 42 / 0.05);
+    --shadow-floating: 0 16px 40px rgb(15 23 42 / 0.12);
     --radius-lg: 12px;
     --radius-md: 10px;
     --radius-sm: 8px;
@@ -49,7 +60,6 @@
   }
 
   * {
-    border-color: rgb(var(--border));
     border-color: rgb(var(--border));
   }
   button,

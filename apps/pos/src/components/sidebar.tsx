@@ -20,12 +20,12 @@ export function Sidebar({
 }) {
   return (
     <aside
-      className="flex h-full w-[260px] shrink-0 flex-col border-r border-[#252525] bg-[#111] p-4 text-[#f9f7f2] max-lg:w-[76px] max-lg:px-3"
+      className="flex h-full w-[260px] shrink-0 flex-col border-r border-nav-border bg-nav p-4 text-nav-foreground max-lg:w-[76px] max-lg:px-3"
       aria-label="Primary navigation"
     >
-      <div className="mb-4 border-b border-[#2d2d2d] px-2 pb-4">
+      <div className="mb-4 border-b border-nav-border px-2 pb-4">
         <span className="text-lg font-black tracking-tight">ATE 05</span>
-        <p className="mt-1 text-xs text-[#c9c9c9] max-lg:hidden">
+        <p className="mt-1 text-xs text-nav-muted max-lg:hidden">
           Restaurant Management
         </p>
       </div>
@@ -39,8 +39,8 @@ export function Sidebar({
             className={cn(
               "flex min-h-11 w-full items-center gap-3 rounded-md border px-3 text-left text-sm font-semibold transition-colors",
               active === item
-                ? "border-primary bg-primary text-white"
-                : "border-[#2f2f2f] text-[#ececec] hover:bg-[#1b1b1b]",
+                ? "border-nav-active bg-nav-active text-nav-active-foreground"
+                : "border-transparent text-nav-muted hover:bg-nav-hover hover:text-nav-foreground",
             )}
           >
             <Icon name={icons[item]} />
@@ -48,11 +48,11 @@ export function Sidebar({
           </button>
         ))}
       </nav>
-      <div className="mt-auto rounded-md border border-[#2d2d2d] bg-[#1b1b1b] p-3 max-lg:hidden">
+      <div className="mt-auto rounded-md border border-nav-border bg-nav-hover p-3 max-lg:hidden">
         <p className="text-xs">Receptionist</p>
         <p className="mt-1 flex justify-between text-xs">
           <strong>Naa Adjeley</strong>
-          <span className="text-emerald-400">● Online</span>
+          <span className="text-success">● Online</span>
         </p>
       </div>
     </aside>

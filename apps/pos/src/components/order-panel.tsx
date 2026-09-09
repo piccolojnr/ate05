@@ -1,6 +1,5 @@
-import { Badge, Button, Card } from "@ate05/ui";
+import { Badge, Button, Card, Input } from "@ate05/ui";
 import { Icon } from "./icons";
-import { Input } from "./ui/input";
 import { useState } from "react";
 import {
   formatGhs,
