@@ -25,6 +25,8 @@ export function App() {
   const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
   const [tableId, setTableId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [sendingToKitchen, setSendingToKitchen] = useState(false);
   const [loading, setLoading] = useState(true);
   const itemCount = useMemo(
     () => order?.items.reduce((total, line) => total + line.quantity, 0) ?? 0,
@@ -51,6 +53,7 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, []);
   async function addItem(menuItemId: string) {
+    setNotice(null);
     try {
       const updated = await client.addMenuItem({
         orderId: order?.id,
@@ -69,6 +72,7 @@ export function App() {
   async function changeQuantity(itemId: string, quantity: number) {
     if (!order) return;
     try {
+      setNotice(null);
       setOrder(
         await client.updateOrderItemQuantity(order.id, itemId, quantity),
       );
@@ -82,11 +86,34 @@ export function App() {
   async function changeNote(itemId: string, notes: string) {
     if (!order) return;
     try {
+      setNotice(null);
       setOrder(await client.updateOrderItemNote(order.id, itemId, notes));
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Unable to save this note.",
       );
+    }
+  }
+  async function sendToKitchen() {
+    if (!order) return;
+    setSendingToKitchen(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await client.sendOrderToKitchen(order.id);
+      setOrder(updated);
+      await refresh();
+      setNotice(
+        `${updated.kitchenTickets.at(-1)?.type === "initial" ? "Initial" : "Kitchen"} ticket sent successfully.`,
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to send this order to the kitchen.",
+      );
+    } finally {
+      setSendingToKitchen(false);
     }
   }
   async function openOrder(summary: OpenOrder) {
@@ -126,6 +153,8 @@ export function App() {
           order={order}
           onQuantityChange={changeQuantity}
           onNoteChange={changeNote}
+          onSendToKitchen={sendToKitchen}
+          sendingToKitchen={sendingToKitchen}
         />
       </div>
     ) : (
@@ -198,6 +227,14 @@ export function App() {
               className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
             >
               {error}
+            </p>
+          ) : null}
+          {notice ? (
+            <p
+              role="status"
+              className="mb-3 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success"
+            >
+              {notice}
             </p>
           ) : null}
           {content}

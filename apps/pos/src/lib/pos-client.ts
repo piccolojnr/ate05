@@ -44,9 +44,33 @@ export interface PosOrder {
   totalMinor: number;
   openedAt: string;
   items: OrderItem[];
+  kitchenTickets: KitchenTicket[];
+  kitchenChangesPending: boolean;
 }
 
-export type OpenOrder = Omit<PosOrder, "items">;
+export type OpenOrder = Omit<
+  PosOrder,
+  "items" | "kitchenTickets" | "kitchenChangesPending"
+>;
+
+export interface KitchenTicketItem {
+  id: string;
+  orderItemId: string | null;
+  itemName: string;
+  quantity: number;
+  action: "add" | "cancel";
+  notes: string | null;
+}
+
+export interface KitchenTicket {
+  id: string;
+  sequence: number;
+  type: "initial" | "addition" | "cancellation";
+  printStatus: "pending" | "printed" | "failed";
+  printedAt: string | null;
+  createdAt: string;
+  items: KitchenTicketItem[];
+}
 
 export interface PosBootstrap {
   businessId: string;
@@ -77,6 +101,7 @@ export interface PosClient {
     notes: string,
   ): Promise<PosOrder>;
   removeOrderItem(orderId: string, itemId: string): Promise<PosOrder>;
+  sendOrderToKitchen(orderId: string): Promise<PosOrder>;
 }
 
 export function formatGhs(minor: number): string {

@@ -13,14 +13,16 @@ This package owns ATE05's local SQLite persistence: the Drizzle schema, checked-
 
 - `orders.status` describes kitchen/operational progress; `orders.payment_status` describes settlement. They intentionally remain separate.
 - Order items and kitchen-ticket items hold name, price/quantity, notes, and action snapshots. This allows historic receipts and ticket reprints to survive menu changes.
-- A kitchen ticket belongs to an order but has its own sequence and type (`initial`, `addition`, or `cancellation`). Additions are new tickets, not full-order reprints.
+- A kitchen ticket belongs to an order but has its own sequence and type (`initial`, `addition`, or `cancellation`). Tickets are immutable, remain `pending` until a future printer succeeds, and are never marked printed on creation.
+- Kitchen deltas are derived from ticket history: for each order line, sent quantity is the sum of ticket-item additions minus cancellations. This keeps the synchronization marker auditable without adding mutable sent-quantity fields to order items.
+- A material note change is explicit: the next send creates a cancellation for the previously sent quantity/note followed by an addition for the current quantity/note. An unsent item removed before its first send creates no cancellation.
 - Table status is a small persisted operational snapshot for V1 (`available`, `occupied`, `reserved`). A future order-aware seating service can reconcile it; no floor-plan or reservation model exists yet.
 - Inventory keeps `current_quantity` for fast offline reads and makes `stock_movements` the audit history. Updating a balance and inserting its movement must happen in one SQLite transaction.
 
 ## Transaction boundaries for future services
 
 - record payment + recalculate/update order payment status
-- create kitchen ticket + ticket-item snapshots + order status update
+- calculate kitchen delta + create ticket/item snapshots + update order status in one SQLite transaction
 - create stock movement + update inventory balance
 - close order + issue receipt snapshot + assign receipt number
 - create order + item snapshots + assign local order number
@@ -29,4 +31,4 @@ The development seed is deliberately explicit: call `seedDevelopmentData` only i
 
 ## POS operations
 
-`createPosService(sqlite)` provides the small application-service surface used by a native POS bridge: menu/table reads, first-item order creation, open-order reads, item quantity changes, notes, and totals. It is deliberately not a generic repository framework. The first menu item creates the order inside the same transaction, preventing abandoned empty orders. Reopening an order always reads the persisted order-item snapshots rather than current menu prices.
+`createPosService(sqlite)` provides the small application-service surface used by a native POS bridge: menu/table reads, first-item order creation, open-order reads, item quantity changes, notes, totals, kitchen sending, and ticket history. It is deliberately not a generic repository framework. The first menu item creates the order inside the same transaction, preventing abandoned empty orders. Reopening an order always reads the persisted order-item and kitchen-ticket snapshots rather than current menu prices.

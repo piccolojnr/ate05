@@ -1,4 +1,5 @@
 import type {
+  KitchenTicket,
   MenuCategory,
   MenuItem,
   PosBootstrap,
@@ -6,6 +7,7 @@ import type {
   PosOrder,
   RestaurantTable,
 } from "./pos-client";
+import { calculateKitchenDeltas, type KitchenSyncLine } from "@ate05/domain";
 
 const storageKey = "ate05-pos-browser-preview-v1";
 const businessId = "00000000-0000-4000-8000-000000000001";
@@ -60,9 +62,14 @@ const tables: RestaurantTable[] = [1, 2, 3, 4].map((number) => ({
 
 function readState(): PreviewState {
   const raw = window.localStorage.getItem(storageKey);
-  return raw
+  const state = raw
     ? (JSON.parse(raw) as PreviewState)
     : { nextOrderNumber: 1, orders: [] };
+  for (const order of state.orders) {
+    order.kitchenTickets ??= [];
+    order.kitchenChangesPending ??= false;
+  }
+  return state;
 }
 function writeState(state: PreviewState): void {
   window.localStorage.setItem(storageKey, JSON.stringify(state));
@@ -73,6 +80,64 @@ function refreshOrder(order: PosOrder): PosOrder {
     0,
   );
   return { ...order, subtotalMinor, totalMinor: subtotalMinor };
+}
+
+function kitchenSyncLines(order: PosOrder): KitchenSyncLine[] {
+  const sent = new Map<
+    string,
+    { quantity: number; notes: string | null; itemName: string }
+  >();
+  for (const ticket of order.kitchenTickets) {
+    for (const item of ticket.items) {
+      if (!item.orderItemId) continue;
+      const previous = sent.get(item.orderItemId) ?? {
+        quantity: 0,
+        notes: null,
+        itemName: item.itemName,
+      };
+      previous.quantity +=
+        item.action === "add" ? item.quantity : -item.quantity;
+      if (item.action === "add") {
+        previous.notes = item.notes;
+        previous.itemName = item.itemName;
+      }
+      sent.set(item.orderItemId, previous);
+    }
+  }
+  const lines = order.items.map((item) => {
+    const previous = sent.get(item.id);
+    return {
+      orderItemId: item.id,
+      itemName: item.name,
+      quantity: item.quantity,
+      notes: item.notes,
+      sentQuantity: previous?.quantity ?? 0,
+      sentNotes: previous?.notes ?? null,
+    };
+  });
+  for (const [orderItemId, previous] of sent) {
+    if (order.items.some((item) => item.id === orderItemId)) continue;
+    lines.push({
+      orderItemId,
+      itemName: previous.itemName,
+      quantity: 0,
+      notes: null,
+      sentQuantity: previous.quantity,
+      sentNotes: previous.notes,
+    });
+  }
+  return lines;
+}
+
+function updateKitchenPending(order: PosOrder): PosOrder {
+  return {
+    ...order,
+    kitchenChangesPending:
+      calculateKitchenDeltas(
+        kitchenSyncLines(order),
+        order.kitchenTickets.length > 0,
+      ).length > 0,
+  };
 }
 
 /** Browser-only preview adapter. Desktop uses the explicit Tauri command client. */
@@ -97,7 +162,9 @@ export function createBrowserPreviewClient(): PosClient {
           status: occupied.has(table.id) ? "occupied" : table.status,
         })),
         openOrders: state.orders
-          .filter((order) => order.status === "open")
+          .filter((order) =>
+            ["open", "sent_to_kitchen", "preparing"].includes(order.status),
+          )
           .map((order) => ({
             id: order.id,
             businessId: order.businessId,
@@ -138,9 +205,13 @@ export function createBrowserPreviewClient(): PosClient {
           totalMinor: 0,
           openedAt: new Date().toISOString(),
           items: [],
+          kitchenTickets: [],
+          kitchenChangesPending: false,
         };
         state.orders.push(order);
       }
+      if (!["open", "sent_to_kitchen", "preparing"].includes(order.status))
+        throw new Error("This order can no longer be changed.");
       const existing = order.items.find(
         (item) => item.menuItemId === menuItem.id && !item.notes,
       );
@@ -162,7 +233,7 @@ export function createBrowserPreviewClient(): PosClient {
         entry.id === order!.id ? order! : entry,
       );
       writeState(state);
-      return order;
+      return updateKitchenPending(order);
     },
     async getOrder(orderId) {
       const order = readState().orders.find((entry) => entry.id === orderId);
@@ -172,7 +243,12 @@ export function createBrowserPreviewClient(): PosClient {
     async updateOrderItemQuantity(orderId, itemId, quantity) {
       const state = readState();
       const order = state.orders.find((entry) => entry.id === orderId);
-      if (!order || quantity < 0) throw new Error("Order item is unavailable.");
+      if (
+        !order ||
+        !["open", "sent_to_kitchen", "preparing"].includes(order.status) ||
+        quantity < 0
+      )
+        throw new Error("Order item is unavailable.");
       order.items =
         quantity === 0
           ? order.items.filter((item) => item.id !== itemId)
@@ -186,29 +262,85 @@ export function createBrowserPreviewClient(): PosClient {
                 : item,
             );
       const updated = refreshOrder(order);
+      const result = updateKitchenPending(updated);
       state.orders = state.orders.map((entry) =>
-        entry.id === orderId ? updated : entry,
+        entry.id === orderId ? result : entry,
       );
       writeState(state);
-      return updated;
+      return result;
     },
     async updateOrderItemNote(orderId, itemId, notes) {
       const state = readState();
       const order = state.orders.find((entry) => entry.id === orderId);
-      if (!order) throw new Error("Order item is unavailable.");
+      if (
+        !order ||
+        !["open", "sent_to_kitchen", "preparing"].includes(order.status)
+      )
+        throw new Error("Order item is unavailable.");
       order.items = order.items.map((item) =>
         item.id === itemId ? { ...item, notes: notes.trim() || null } : item,
       );
+      const result = updateKitchenPending(order);
+      state.orders = state.orders.map((entry) =>
+        entry.id === orderId ? result : entry,
+      );
       writeState(state);
-      return order;
+      return result;
     },
     async removeOrderItem(orderId, itemId) {
       const state = readState();
       const order = state.orders.find((entry) => entry.id === orderId);
-      if (!order) throw new Error("Order not found.");
+      if (
+        !order ||
+        !["open", "sent_to_kitchen", "preparing"].includes(order.status)
+      )
+        throw new Error("Order not found.");
       const updated = refreshOrder({
         ...order,
         items: order.items.filter((item) => item.id !== itemId),
+      });
+      const result = updateKitchenPending(updated);
+      state.orders = state.orders.map((entry) =>
+        entry.id === orderId ? result : entry,
+      );
+      writeState(state);
+      return result;
+    },
+    async sendOrderToKitchen(orderId) {
+      const state = readState();
+      const order = state.orders.find((entry) => entry.id === orderId);
+      if (!order) throw new Error("Order not found.");
+      if (!["open", "sent_to_kitchen", "preparing"].includes(order.status))
+        throw new Error("Only an active order can be sent to the kitchen.");
+      const deltas = calculateKitchenDeltas(
+        kitchenSyncLines(order),
+        order.kitchenTickets.length > 0,
+      );
+      let sequence = order.kitchenTickets.length + 1;
+      const createdAt = new Date().toISOString();
+      const tickets: KitchenTicket[] = deltas.map((delta) => ({
+        id: crypto.randomUUID(),
+        sequence: sequence++,
+        type: delta.type,
+        printStatus: "pending",
+        printedAt: null,
+        createdAt,
+        items: delta.items.map((item) => ({
+          id: crypto.randomUUID(),
+          orderItemId: item.orderItemId,
+          itemName: item.itemName,
+          quantity: item.quantity,
+          action: item.action,
+          notes: item.notes,
+        })),
+      }));
+      const updated = updateKitchenPending({
+        ...order,
+        status:
+          deltas.length > 0 && order.status === "open"
+            ? "sent_to_kitchen"
+            : order.status,
+        kitchenTickets: [...order.kitchenTickets, ...tickets],
       });
       state.orders = state.orders.map((entry) =>
         entry.id === orderId ? updated : entry,

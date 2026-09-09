@@ -2,10 +2,33 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   calculateOrderTotals,
+  calculateKitchenDeltas,
   multiplyMoney,
   money,
   type OrderType,
 } from "@ate05/domain";
+
+export type KitchenTicketType = "initial" | "addition" | "cancellation";
+export type KitchenPrintStatus = "pending" | "printed" | "failed";
+
+export interface PosKitchenTicketItem {
+  id: string;
+  orderItemId: string | null;
+  itemName: string;
+  quantity: number;
+  action: "add" | "cancel";
+  notes: string | null;
+}
+
+export interface PosKitchenTicket {
+  id: string;
+  sequence: number;
+  type: KitchenTicketType;
+  printStatus: KitchenPrintStatus;
+  printedAt: string | null;
+  createdAt: string;
+  items: PosKitchenTicketItem[];
+}
 
 export interface PosMenuCategory {
   id: string;
@@ -51,9 +74,14 @@ export interface PosOrder {
   totalMinor: number;
   openedAt: string;
   items: PosOrderItem[];
+  kitchenTickets: PosKitchenTicket[];
+  kitchenChangesPending: boolean;
 }
 
-export type OpenOrderSummary = Omit<PosOrder, "items">;
+export type OpenOrderSummary = Omit<
+  PosOrder,
+  "items" | "kitchenTickets" | "kitchenChangesPending"
+>;
 
 export interface AddMenuItemInput {
   businessId: string;
@@ -69,6 +97,12 @@ export interface CreateOrderInput {
   createdBy: string;
   orderType: OrderType;
   tableId?: string | null;
+}
+
+export interface SendOrderToKitchenInput {
+  businessId: string;
+  orderId: string;
+  userId: string;
 }
 
 function now(): string {
@@ -106,6 +140,8 @@ function assertOrderShape(input: CreateOrderInput): void {
     throw new Error("Takeaway orders cannot be assigned a table.");
   }
 }
+
+const mutableOrderStatuses = "('open', 'sent_to_kitchen', 'preparing')";
 
 /**
  * Local POS application service. All mutations run in a single SQLite transaction
@@ -197,8 +233,11 @@ export function createPosService(sqlite: Database.Database) {
         )
         .get(orderId, input.businessId) as
         { id: string; businessId: string; status: string } | undefined;
-      if (!order || order.status !== "open")
-        throw new Error("Only open orders can be changed.");
+      if (
+        !order ||
+        !["open", "sent_to_kitchen", "preparing"].includes(order.status)
+      )
+        throw new Error("This order can no longer be changed.");
       const existing = sqlite
         .prepare(
           "SELECT id, quantity, unit_price_minor_snapshot AS unitPriceMinor FROM order_items WHERE order_id = ? AND menu_item_id = ? AND notes IS NULL",
@@ -249,7 +288,7 @@ export function createPosService(sqlite: Database.Database) {
     sqlite.transaction(() => {
       const item = sqlite
         .prepare(
-          "SELECT oi.id, oi.unit_price_minor_snapshot AS unitPriceMinor FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id = ? AND oi.order_id = ? AND o.business_id = ? AND o.status = 'open'",
+          `SELECT oi.id, oi.unit_price_minor_snapshot AS unitPriceMinor FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id = ? AND oi.order_id = ? AND o.business_id = ? AND o.status IN ${mutableOrderStatuses}`,
         )
         .get(itemId, orderId, businessId) as
         { id: string; unitPriceMinor: number } | undefined;
@@ -283,7 +322,7 @@ export function createPosService(sqlite: Database.Database) {
   ): PosOrder {
     const updated = sqlite
       .prepare(
-        "UPDATE order_items SET notes = ?, updated_at = ? WHERE id = ? AND order_id = ? AND EXISTS (SELECT 1 FROM orders WHERE id = ? AND business_id = ? AND status = 'open')",
+        `UPDATE order_items SET notes = ?, updated_at = ? WHERE id = ? AND order_id = ? AND EXISTS (SELECT 1 FROM orders WHERE id = ? AND business_id = ? AND status IN ${mutableOrderStatuses})`,
       )
       .run(notes?.trim() || null, now(), itemId, orderId, orderId, businessId);
     if (updated.changes !== 1) throw new Error("Order item is unavailable.");
@@ -302,15 +341,180 @@ export function createPosService(sqlite: Database.Database) {
         "SELECT id, menu_item_id AS menuItemId, item_name_snapshot AS name, unit_price_minor_snapshot AS unitPriceMinor, quantity, line_total_minor AS lineTotalMinor, notes FROM order_items WHERE order_id = ? ORDER BY created_at, id",
       )
       .all(orderId) as PosOrderItem[];
+    const kitchenTickets = listKitchenTickets(orderId, businessId);
+    const syncLines = getKitchenSyncLines(orderId, businessId);
+    order.kitchenTickets = kitchenTickets;
+    order.kitchenChangesPending =
+      calculateKitchenDeltas(syncLines, kitchenTickets.length > 0).length > 0;
     return order;
   }
 
   function listOpenOrders(businessId: string): OpenOrderSummary[] {
     return sqlite
       .prepare(
-        "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = ? AND o.status = 'open' ORDER BY o.opened_at DESC, o.order_number DESC",
+        `SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = ? AND o.status IN ${mutableOrderStatuses} ORDER BY o.opened_at DESC, o.order_number DESC`,
       )
       .all(businessId) as OpenOrderSummary[];
+  }
+
+  function getKitchenSyncLines(orderId: string, businessId: string) {
+    const current = sqlite
+      .prepare(
+        `SELECT oi.id AS orderItemId, oi.item_name_snapshot AS itemName, oi.quantity, oi.notes
+         FROM order_items oi JOIN orders o ON o.id = oi.order_id
+         WHERE oi.order_id = ? AND o.business_id = ?`,
+      )
+      .all(orderId, businessId) as Array<{
+      orderItemId: string;
+      itemName: string;
+      quantity: number;
+      notes: string | null;
+    }>;
+    const sent = sqlite
+      .prepare(
+        `SELECT kti.order_item_id AS orderItemId,
+          SUM(CASE WHEN kti.action = 'add' THEN kti.quantity ELSE -kti.quantity END) AS sentQuantity
+         FROM kitchen_ticket_items kti
+         JOIN kitchen_tickets kt ON kt.id = kti.kitchen_ticket_id
+         WHERE kt.order_id = ? AND kt.business_id = ? AND kti.order_item_id IS NOT NULL
+         GROUP BY kti.order_item_id`,
+      )
+      .all(orderId, businessId) as Array<{
+      orderItemId: string;
+      sentQuantity: number;
+    }>;
+    const currentIds = new Set(current.map((line) => line.orderItemId));
+    const sentMap = new Map(sent.map((line) => [line.orderItemId, line]));
+    const latestNote = (
+      orderItemId: string,
+    ): { itemName: string; notes: string | null } | undefined =>
+      sqlite
+        .prepare(
+          `SELECT kti.item_name_snapshot AS itemName, kti.notes
+           FROM kitchen_ticket_items kti JOIN kitchen_tickets kt ON kt.id = kti.kitchen_ticket_id
+           WHERE kt.order_id = ? AND kt.business_id = ? AND kti.order_item_id = ? AND kti.action = 'add'
+           ORDER BY kt.sequence DESC, kti.created_at DESC LIMIT 1`,
+        )
+        .get(orderId, businessId, orderItemId) as
+        { itemName: string; notes: string | null } | undefined;
+    const withState = current.map((line) => {
+      const sentLine = sentMap.get(line.orderItemId);
+      const latest = latestNote(line.orderItemId);
+      return {
+        ...line,
+        sentQuantity: sentLine?.sentQuantity ?? 0,
+        sentNotes: latest?.notes ?? null,
+      };
+    });
+    for (const sentLine of sent) {
+      if (currentIds.has(sentLine.orderItemId)) continue;
+      const latest = latestNote(sentLine.orderItemId);
+      if (latest) {
+        withState.push({
+          orderItemId: sentLine.orderItemId,
+          itemName: latest.itemName,
+          quantity: 0,
+          notes: null,
+          sentQuantity: sentLine.sentQuantity,
+          sentNotes: latest.notes,
+        });
+      }
+    }
+    return withState;
+  }
+
+  function listKitchenTickets(
+    orderId: string,
+    businessId: string,
+  ): PosKitchenTicket[] {
+    const tickets = sqlite
+      .prepare(
+        "SELECT id, sequence, type, print_status AS printStatus, printed_at AS printedAt, created_at AS createdAt FROM kitchen_tickets WHERE order_id = ? AND business_id = ? ORDER BY sequence",
+      )
+      .all(orderId, businessId) as Array<{
+      id: string;
+      sequence: number;
+      type: KitchenTicketType;
+      printStatus: KitchenPrintStatus;
+      printedAt: string | null;
+      createdAt: string;
+    }>;
+    const itemQuery = sqlite.prepare(
+      "SELECT id, order_item_id AS orderItemId, item_name_snapshot AS itemName, quantity, action, notes FROM kitchen_ticket_items WHERE kitchen_ticket_id = ? ORDER BY created_at, id",
+    );
+    return tickets.map((ticket) => ({
+      ...ticket,
+      items: itemQuery.all(ticket.id) as PosKitchenTicketItem[],
+    }));
+  }
+
+  function sendOrderToKitchen(input: SendOrderToKitchenInput): PosOrder {
+    sqlite.transaction(() => {
+      const order = sqlite
+        .prepare(
+          `SELECT id, status FROM orders WHERE id = ? AND business_id = ? AND status IN ${mutableOrderStatuses}`,
+        )
+        .get(input.orderId, input.businessId) as
+        { id: string; status: string } | undefined;
+      if (!order)
+        throw new Error("Only an active order can be sent to the kitchen.");
+      const user = sqlite
+        .prepare(
+          "SELECT id FROM users WHERE id = ? AND business_id = ? AND active = 1",
+        )
+        .get(input.userId, input.businessId);
+      if (!user) throw new Error("The sending user is unavailable.");
+      const tickets = listKitchenTickets(input.orderId, input.businessId);
+      const deltas = calculateKitchenDeltas(
+        getKitchenSyncLines(input.orderId, input.businessId),
+        tickets.length > 0,
+      );
+      if (deltas.length === 0) return;
+      const next = sqlite
+        .prepare(
+          "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM kitchen_tickets WHERE order_id = ?",
+        )
+        .get(input.orderId) as { sequence: number };
+      const insertTicket = sqlite.prepare(
+        "INSERT INTO kitchen_tickets (id, business_id, order_id, sequence, type, created_by, print_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+      );
+      const insertItem = sqlite.prepare(
+        "INSERT INTO kitchen_ticket_items (id, business_id, kitchen_ticket_id, order_item_id, item_name_snapshot, quantity, action, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      let sequence = next.sequence;
+      for (const delta of deltas) {
+        const ticketId = randomUUID();
+        const timestamp = now();
+        insertTicket.run(
+          ticketId,
+          input.businessId,
+          input.orderId,
+          sequence++,
+          delta.type,
+          input.userId,
+          timestamp,
+          timestamp,
+        );
+        for (const item of delta.items)
+          insertItem.run(
+            randomUUID(),
+            input.businessId,
+            ticketId,
+            item.orderItemId,
+            item.itemName,
+            item.quantity,
+            item.action,
+            item.notes,
+            timestamp,
+          );
+      }
+      sqlite
+        .prepare(
+          "UPDATE orders SET status = CASE WHEN status = 'open' THEN 'sent_to_kitchen' ELSE status END, updated_at = ? WHERE id = ? AND business_id = ?",
+        )
+        .run(now(), input.orderId, input.businessId);
+    })();
+    return getOrder(input.orderId, input.businessId);
   }
 
   return {
@@ -320,6 +524,7 @@ export function createPosService(sqlite: Database.Database) {
     getOrder,
     listAvailableTables,
     listOpenOrders,
+    sendOrderToKitchen,
     updateOrderItemNote,
     updateOrderItemQuantity,
   };

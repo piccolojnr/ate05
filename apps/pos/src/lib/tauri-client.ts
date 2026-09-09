@@ -1,6 +1,13 @@
 import Database from "@tauri-apps/plugin-sql";
-import { calculateOrderTotals, money, multiplyMoney } from "@ate05/domain";
+import {
+  calculateKitchenDeltas,
+  calculateOrderTotals,
+  money,
+  multiplyMoney,
+  type KitchenSyncLine,
+} from "@ate05/domain";
 import type {
+  KitchenTicket,
   OrderType,
   PosBootstrap,
   PosClient,
@@ -161,7 +168,102 @@ function mapOrder(row: Row, items: PosOrder["items"]): PosOrder {
     totalMinor: asNumber(row.totalMinor),
     openedAt: asString(row.openedAt),
     items,
+    kitchenTickets: [],
+    kitchenChangesPending: false,
   };
+}
+async function getKitchenTickets(
+  db: SqlDatabase,
+  orderId: string,
+): Promise<KitchenTicket[]> {
+  const tickets = await select<Row>(
+    db,
+    "SELECT id, sequence, type, print_status AS printStatus, printed_at AS printedAt, created_at AS createdAt FROM kitchen_tickets WHERE order_id = $1 AND business_id = $2 ORDER BY sequence",
+    [orderId, businessId],
+  );
+  const result: KitchenTicket[] = [];
+  for (const ticket of tickets) {
+    const items = await select<Row>(
+      db,
+      "SELECT id, order_item_id AS orderItemId, item_name_snapshot AS itemName, quantity, action, notes FROM kitchen_ticket_items WHERE kitchen_ticket_id = $1 ORDER BY created_at, id",
+      [asString(ticket.id)],
+    );
+    result.push({
+      id: asString(ticket.id),
+      sequence: asNumber(ticket.sequence),
+      type: asString(ticket.type) as KitchenTicket["type"],
+      printStatus: asString(ticket.printStatus) as KitchenTicket["printStatus"],
+      printedAt: asNullableString(ticket.printedAt),
+      createdAt: asString(ticket.createdAt),
+      items: items.map((item) => ({
+        id: asString(item.id),
+        orderItemId: asNullableString(item.orderItemId),
+        itemName: asString(item.itemName),
+        quantity: asNumber(item.quantity),
+        action: asString(item.action) as "add" | "cancel",
+        notes: asNullableString(item.notes),
+      })),
+    });
+  }
+  return result;
+}
+async function getKitchenSyncLines(
+  db: SqlDatabase,
+  orderId: string,
+): Promise<KitchenSyncLine[]> {
+  const current = await select<Row>(
+    db,
+    "SELECT id AS orderItemId, item_name_snapshot AS itemName, quantity, notes FROM order_items WHERE order_id = $1",
+    [orderId],
+  );
+  const sent = await select<Row>(
+    db,
+    "SELECT kti.order_item_id AS orderItemId, SUM(CASE WHEN kti.action = 'add' THEN kti.quantity ELSE -kti.quantity END) AS sentQuantity FROM kitchen_ticket_items kti JOIN kitchen_tickets kt ON kt.id = kti.kitchen_ticket_id WHERE kt.order_id = $1 AND kt.business_id = $2 AND kti.order_item_id IS NOT NULL GROUP BY kti.order_item_id",
+    [orderId, businessId],
+  );
+  const latestNotes = await select<Row>(
+    db,
+    "SELECT kti.order_item_id AS orderItemId, kti.item_name_snapshot AS itemName, kti.notes, kt.sequence FROM kitchen_ticket_items kti JOIN kitchen_tickets kt ON kt.id = kti.kitchen_ticket_id WHERE kt.order_id = $1 AND kt.business_id = $2 AND kti.action = 'add' AND kti.order_item_id IS NOT NULL ORDER BY kt.sequence DESC, kti.created_at DESC",
+    [orderId, businessId],
+  );
+  const sentMap = new Map(
+    sent.map((line) => [
+      asString(line.orderItemId),
+      asNumber(line.sentQuantity),
+    ]),
+  );
+  const noteMap = new Map<string, { itemName: string; notes: string | null }>();
+  for (const line of latestNotes) {
+    const id = asString(line.orderItemId);
+    if (!noteMap.has(id))
+      noteMap.set(id, {
+        itemName: asString(line.itemName),
+        notes: asNullableString(line.notes),
+      });
+  }
+  const currentIds = new Set(current.map((line) => asString(line.orderItemId)));
+  const lines: KitchenSyncLine[] = current.map((line) => ({
+    orderItemId: asString(line.orderItemId),
+    itemName: asString(line.itemName),
+    quantity: asNumber(line.quantity),
+    notes: asNullableString(line.notes),
+    sentQuantity: sentMap.get(asString(line.orderItemId)) ?? 0,
+    sentNotes: noteMap.get(asString(line.orderItemId))?.notes ?? null,
+  }));
+  for (const [orderItemId, sentQuantity] of sentMap) {
+    if (currentIds.has(orderItemId)) continue;
+    const note = noteMap.get(orderItemId);
+    if (note)
+      lines.push({
+        orderItemId,
+        itemName: note.itemName,
+        quantity: 0,
+        notes: null,
+        sentQuantity,
+        sentNotes: note.notes,
+      });
+  }
+  return lines;
 }
 async function getOrder(db: SqlDatabase, orderId: string): Promise<PosOrder> {
   const [order] = await select<Row>(
@@ -175,7 +277,7 @@ async function getOrder(db: SqlDatabase, orderId: string): Promise<PosOrder> {
     "SELECT id, menu_item_id AS menuItemId, item_name_snapshot AS name, unit_price_minor_snapshot AS unitPriceMinor, quantity, line_total_minor AS lineTotalMinor, notes FROM order_items WHERE order_id = $1 ORDER BY created_at, id",
     [orderId],
   );
-  return mapOrder(
+  const orderResult = mapOrder(
     order,
     rows.map((row) => ({
       id: asString(row.id),
@@ -187,6 +289,13 @@ async function getOrder(db: SqlDatabase, orderId: string): Promise<PosOrder> {
       notes: asNullableString(row.notes),
     })),
   );
+  orderResult.kitchenTickets = await getKitchenTickets(db, orderId);
+  orderResult.kitchenChangesPending =
+    calculateKitchenDeltas(
+      await getKitchenSyncLines(db, orderId),
+      orderResult.kitchenTickets.length > 0,
+    ).length > 0;
+  return orderResult;
 }
 async function recalculateTotals(
   db: SqlDatabase,
@@ -233,7 +342,7 @@ export function createTauriClient(): PosClient {
       );
       const openOrders = await select<Row>(
         db,
-        "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = $1 AND o.status = 'open' ORDER BY o.opened_at DESC, o.order_number DESC",
+        "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = $1 AND o.status IN ('open', 'sent_to_kitchen', 'preparing') ORDER BY o.opened_at DESC, o.order_number DESC",
         [businessId],
       );
       return {
@@ -321,6 +430,16 @@ export function createTauriClient(): PosClient {
             ],
           );
         }
+        const [existingOrder] = await select<Row>(
+          db,
+          "SELECT id, status FROM orders WHERE id = $1 AND business_id = $2 AND status IN ('open', 'sent_to_kitchen', 'preparing')",
+          [orderId, businessId],
+        );
+        if (!existingOrder)
+          throw new PosClientError(
+            "invalid_state",
+            "This order can no longer be changed.",
+          );
         const [existing] = await select<Row>(
           db,
           "SELECT id, quantity, unit_price_minor_snapshot AS unitPriceMinor FROM order_items WHERE order_id = $1 AND menu_item_id = $2 AND notes IS NULL",
@@ -378,7 +497,7 @@ export function createTauriClient(): PosClient {
       try {
         const [item] = await select<Row>(
           db,
-          "SELECT oi.id, oi.unit_price_minor_snapshot AS unitPriceMinor FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id = $1 AND oi.order_id = $2 AND o.business_id = $3 AND o.status = 'open'",
+          "SELECT oi.id, oi.unit_price_minor_snapshot AS unitPriceMinor FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id = $1 AND oi.order_id = $2 AND o.business_id = $3 AND o.status IN ('open', 'sent_to_kitchen', 'preparing')",
           [itemId, orderId, businessId],
         );
         if (!item)
@@ -413,7 +532,7 @@ export function createTauriClient(): PosClient {
       const db = await database();
       await execute(
         db,
-        "UPDATE order_items SET notes = $1, updated_at = $2 WHERE id = $3 AND order_id = $4 AND EXISTS (SELECT 1 FROM orders WHERE id = $4 AND business_id = $5 AND status = 'open')",
+        "UPDATE order_items SET notes = $1, updated_at = $2 WHERE id = $3 AND order_id = $4 AND EXISTS (SELECT 1 FROM orders WHERE id = $4 AND business_id = $5 AND status IN ('open', 'sent_to_kitchen', 'preparing'))",
         [notes.trim() || null, timestamp(), itemId, orderId, businessId],
       );
       return getOrder(db, orderId);
@@ -424,10 +543,94 @@ export function createTauriClient(): PosClient {
       try {
         await execute(
           db,
-          "DELETE FROM order_items WHERE id = $1 AND order_id = $2 AND EXISTS (SELECT 1 FROM orders WHERE id = $2 AND business_id = $3 AND status = 'open')",
+          "DELETE FROM order_items WHERE id = $1 AND order_id = $2 AND EXISTS (SELECT 1 FROM orders WHERE id = $2 AND business_id = $3 AND status IN ('open', 'sent_to_kitchen', 'preparing'))",
           [itemId, orderId, businessId],
         );
         await recalculateTotals(db, orderId);
+        await execute(db, "COMMIT");
+        return getOrder(db, orderId);
+      } catch (error) {
+        await execute(db, "ROLLBACK");
+        throw error;
+      }
+    },
+    async sendOrderToKitchen(orderId) {
+      const db = await database();
+      await execute(db, "BEGIN IMMEDIATE");
+      try {
+        const [order] = await select<Row>(
+          db,
+          "SELECT id, status FROM orders WHERE id = $1 AND business_id = $2 AND status IN ('open', 'sent_to_kitchen', 'preparing')",
+          [orderId, businessId],
+        );
+        if (!order)
+          throw new PosClientError(
+            "invalid_state",
+            "Only an active order can be sent to the kitchen.",
+          );
+        const [user] = await select<Row>(
+          db,
+          "SELECT id FROM users WHERE id = $1 AND business_id = $2 AND active = 1",
+          [createdBy, businessId],
+        );
+        if (!user)
+          throw new PosClientError(
+            "not_found",
+            "The sending user is unavailable.",
+          );
+        const priorTickets = await getKitchenTickets(db, orderId);
+        const deltas = calculateKitchenDeltas(
+          await getKitchenSyncLines(db, orderId),
+          priorTickets.length > 0,
+        );
+        if (deltas.length === 0) {
+          await execute(db, "COMMIT");
+          return getOrder(db, orderId);
+        }
+        const [sequenceRow] = await select<Row>(
+          db,
+          "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM kitchen_tickets WHERE order_id = $1",
+          [orderId],
+        );
+        let sequence = asNumber(sequenceRow?.sequence) || 1;
+        for (const delta of deltas) {
+          const ticketId = crypto.randomUUID();
+          const createdAt = timestamp();
+          await execute(
+            db,
+            "INSERT INTO kitchen_tickets (id, business_id, order_id, sequence, type, created_by, print_status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $7)",
+            [
+              ticketId,
+              businessId,
+              orderId,
+              sequence++,
+              delta.type,
+              createdBy,
+              createdAt,
+            ],
+          );
+          for (const item of delta.items)
+            await execute(
+              db,
+              "INSERT INTO kitchen_ticket_items (id, business_id, kitchen_ticket_id, order_item_id, item_name_snapshot, quantity, action, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+              [
+                crypto.randomUUID(),
+                businessId,
+                ticketId,
+                item.orderItemId,
+                item.itemName,
+                item.quantity,
+                item.action,
+                item.notes,
+                createdAt,
+              ],
+            );
+        }
+        await execute(
+          db,
+          "UPDATE orders SET status = CASE WHEN status = 'open' THEN 'sent_to_kitchen' ELSE status END, updated_at = $1 WHERE id = $2 AND business_id = $3",
+          [timestamp(), orderId, businessId],
+        );
         await execute(db, "COMMIT");
         return getOrder(db, orderId);
       } catch (error) {

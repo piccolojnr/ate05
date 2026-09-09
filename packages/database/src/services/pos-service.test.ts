@@ -190,4 +190,298 @@ describe("POS application service", () => {
       service.getOrder("missing", "00000000-0000-4000-8000-000000000901"),
     ).toThrow("not found");
   });
+
+  it("creates one initial pending ticket and moves the order to the kitchen", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: coke,
+      orderType: "takeaway",
+      orderId: order.id,
+    });
+    const sent = service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    expect(sent).toMatchObject({
+      status: "sent_to_kitchen",
+      paymentStatus: "unpaid",
+      kitchenChangesPending: false,
+    });
+    expect(sent.kitchenTickets).toHaveLength(1);
+    expect(sent.kitchenTickets[0]).toMatchObject({
+      sequence: 1,
+      type: "initial",
+      printStatus: "pending",
+    });
+    expect(sent.kitchenTickets[0]?.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          itemName: "Fried Rice",
+          quantity: 1,
+          action: "add",
+        }),
+        expect.objectContaining({
+          itemName: "Coke",
+          quantity: 1,
+          action: "add",
+        }),
+      ]),
+    );
+  });
+
+  it("does not duplicate a ticket when Send to Kitchen has no changes", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    const again = service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    expect(again.kitchenTickets).toHaveLength(1);
+  });
+
+  it("creates addition deltas for new and increased quantities", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    let updated = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+      orderId: order.id,
+    });
+    updated = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: coke,
+      orderType: "takeaway",
+      orderId: order.id,
+    });
+    const sent = service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    expect(updated.kitchenChangesPending).toBe(true);
+    expect(sent.kitchenTickets).toHaveLength(2);
+    expect(sent.kitchenTickets[1]).toMatchObject({
+      type: "addition",
+      sequence: 2,
+    });
+    expect(sent.kitchenTickets[1]?.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          itemName: "Fried Rice",
+          quantity: 1,
+          action: "add",
+        }),
+        expect.objectContaining({
+          itemName: "Coke",
+          quantity: 1,
+          action: "add",
+        }),
+      ]),
+    );
+  });
+
+  it("creates cancellation deltas for reductions and fully removed sent items", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    const item = order.items[0]!;
+    service.updateOrderItemQuantity(business, order.id, item.id, 3);
+    service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    let updated = service.updateOrderItemQuantity(
+      business,
+      order.id,
+      item.id,
+      2,
+    );
+    expect(updated.kitchenChangesPending).toBe(true);
+    let sent = service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    expect(sent.kitchenTickets[1]?.items).toEqual([
+      expect.objectContaining({
+        itemName: "Fried Rice",
+        quantity: 1,
+        action: "cancel",
+      }),
+    ]);
+    updated = service.updateOrderItemQuantity(business, order.id, item.id, 0);
+    sent = service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    expect(updated.items).toHaveLength(0);
+    expect(sent.kitchenTickets[2]?.items).toEqual([
+      expect.objectContaining({
+        itemName: "Fried Rice",
+        quantity: 2,
+        action: "cancel",
+      }),
+    ]);
+  });
+
+  it("does not create a cancellation for an item removed before its first send", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    service.updateOrderItemQuantity(business, order.id, order.items[0]!.id, 0);
+    const sent = service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    expect(sent.kitchenTickets).toHaveLength(0);
+    expect(sent.status).toBe("open");
+  });
+
+  it("uses cancellation plus addition for a material note change", () => {
+    let order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    const itemId = order.items[0]!.id;
+    order = service.updateOrderItemNote(
+      business,
+      order.id,
+      itemId,
+      "No pepper",
+    );
+    service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    order = service.updateOrderItemNote(
+      business,
+      order.id,
+      itemId,
+      "Extra pepper",
+    );
+    const sent = service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    expect(sent.kitchenTickets.slice(1).map((ticket) => ticket.type)).toEqual([
+      "cancellation",
+      "addition",
+    ]);
+    expect(sent.kitchenTickets[1]?.items[0]).toMatchObject({
+      quantity: 1,
+      action: "cancel",
+      notes: "No pepper",
+    });
+    expect(sent.kitchenTickets[2]?.items[0]).toMatchObject({
+      quantity: 1,
+      action: "add",
+      notes: "Extra pepper",
+    });
+  });
+
+  it("keeps ticket snapshots, sequence, print status, and history after service recreation", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    service.updateOrderItemNote(
+      business,
+      order.id,
+      order.items[0]!.id,
+      "No pepper",
+    );
+    service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    database.sqlite
+      .prepare(
+        "UPDATE order_items SET item_name_snapshot = 'Renamed Rice', notes = 'Changed later' WHERE id = ?",
+      )
+      .run(order.items[0]!.id);
+    const reloaded = createPosService(database.sqlite).getOrder(
+      order.id,
+      business,
+    );
+    expect(reloaded.kitchenTickets[0]).toMatchObject({
+      sequence: 1,
+      printStatus: "pending",
+    });
+    expect(reloaded.kitchenTickets[0]?.items[0]).toMatchObject({
+      itemName: "Fried Rice",
+      notes: "No pepper",
+      quantity: 1,
+    });
+  });
+
+  it("rolls back the send operation when validation fails", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    expect(() =>
+      service.sendOrderToKitchen({
+        businessId: business,
+        orderId: order.id,
+        userId: "missing-user",
+      }),
+    ).toThrow("sending user");
+    expect(
+      database.sqlite
+        .prepare("SELECT COUNT(*) AS count FROM kitchen_tickets")
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(service.getOrder(order.id, business)).toMatchObject({
+      status: "open",
+      paymentStatus: "unpaid",
+    });
+  });
 });

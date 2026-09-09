@@ -7,10 +7,14 @@ export function OrderPanel({
   order,
   onQuantityChange,
   onNoteChange,
+  onSendToKitchen,
+  sendingToKitchen,
 }: {
   order: PosOrder | null;
   onQuantityChange: (id: string, quantity: number) => void;
   onNoteChange: (id: string, notes: string) => void;
+  onSendToKitchen: () => void;
+  sendingToKitchen: boolean;
 }) {
   const items = order?.items ?? [];
   return (
@@ -39,6 +43,12 @@ export function OrderPanel({
             {order?.orderType === "dine_in" ? "Dine in" : "Takeaway"}
           </Badge>
           {order?.tableName ? <Badge>{order.tableName}</Badge> : null}
+          {order ? (
+            <Badge tone={order.kitchenChangesPending ? "warning" : "success"}>
+              Kitchen:{" "}
+              {order.kitchenChangesPending ? "Changes pending" : "Sent"}
+            </Badge>
+          ) : null}
         </div>
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
@@ -101,6 +111,42 @@ export function OrderPanel({
         ))}
       </div>
       <div className="border-t p-5">
+        {order?.kitchenTickets.length ? (
+          <div className="mb-4 rounded-md border bg-muted/30 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                Kitchen ticket history
+              </p>
+              <span className="text-xs text-muted-foreground">
+                {order.kitchenTickets.length} ticket
+                {order.kitchenTickets.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="max-h-32 space-y-2 overflow-y-auto">
+              {order.kitchenTickets.map((ticket) => (
+                <div key={ticket.id} className="text-xs">
+                  <div className="flex items-center justify-between font-bold">
+                    <span>
+                      Ticket #{ticket.sequence} · {ticket.type.toUpperCase()}
+                    </span>
+                    <span className="font-normal text-muted-foreground">
+                      {ticket.printStatus === "pending"
+                        ? "Unprinted"
+                        : ticket.printStatus}
+                    </span>
+                  </div>
+                  {ticket.items.map((item) => (
+                    <p key={item.id} className="text-muted-foreground">
+                      {item.action === "cancel" ? "−" : ""}
+                      {item.quantity} {item.itemName}
+                      {item.notes ? ` · ${item.notes}` : ""}
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div className="space-y-2 text-sm">
           <div className="flex justify-between text-muted-foreground">
             <span>Subtotal</span>
@@ -116,8 +162,17 @@ export function OrderPanel({
           </div>
         </div>
         <div className="mt-5 grid grid-cols-2 gap-3">
-          <Button className="w-full !bg-primary hover:!bg-primary/90" disabled>
-            Send to Kitchen
+          <Button
+            className="w-full !bg-primary hover:!bg-primary/90"
+            disabled={
+              !order ||
+              !order.items.length ||
+              !order.kitchenChangesPending ||
+              sendingToKitchen
+            }
+            onClick={onSendToKitchen}
+          >
+            {sendingToKitchen ? "Sending…" : "Send to Kitchen"}
           </Button>
           <Button variant="secondary" className="w-full" disabled>
             Take Payment <Icon name="arrow" width="17" height="17" />
