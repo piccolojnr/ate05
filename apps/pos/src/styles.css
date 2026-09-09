@@ -1,15 +1,66 @@
+@import "@fontsource-variable/geist";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    color: #1c1917;
-    background: #fafaf9;
+    --background: 247 243 237;
+    --foreground: 31 41 55;
+    --card: 255 255 255;
+    --card-foreground: 31 41 55;
+    --primary: 217 115 42;
+    --primary-foreground: 255 255 255;
+    --muted: 250 248 245;
+    --muted-foreground: 107 114 128;
+    --border: 236 230 221;
+    --success: 5 150 105;
+    --warning: 217 119 6;
+    --destructive: 220 38 38;
+    --radius-lg: 12px;
+    --radius-md: 10px;
+    --radius-sm: 8px;
+    color: rgb(var(--foreground));
+    background: rgb(var(--background));
+    font-family:
+      Geist,
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      sans-serif;
+    --popover: 255 255 255;
+    --popover-foreground: 31 41 55;
+    --secondary: 250 248 245;
+    --secondary-foreground: 31 41 55;
+    --accent: 243 231 220;
+    --accent-foreground: 31 41 55;
+    --input: 236 230 221;
+    --ring: 217 115 42;
+    --radius: 0.625rem;
   }
 
   body {
     margin: 0;
     min-width: 320px;
+    background: rgb(var(--background));
+    color: rgb(var(--foreground));
+  }
+
+  * {
+    border-color: rgb(var(--border));
+    border-color: rgb(var(--border));
+  }
+  button,
+  input {
+    font: inherit;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  html {
+    @apply font-sans;
   }
 }

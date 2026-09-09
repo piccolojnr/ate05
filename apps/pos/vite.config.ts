@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      "@": resolve(import.meta.dirname, "./src"),
       "@ate05/ui": resolve(import.meta.dirname, "../../packages/ui/src"),
     },
   },
