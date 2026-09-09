@@ -1,2 +1,4 @@
-/** Future menu domain rules live here. */
-export {};
+export interface MenuAvailability {
+  available: boolean;
+  active: boolean;
+}

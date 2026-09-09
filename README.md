@@ -6,16 +6,16 @@ ATE05 is an offline-first restaurant operations system. Its first application is
 
 The V1 POS is a React/Vite frontend packaged with Tauri 2. SQLite is the initial local source of truth, accessed through Drizzle ORM. No cloud service is required for normal restaurant operation. Cloud sync and additional applications are intentionally deferred.
 
-| Workspace             | Purpose                                               |
-| --------------------- | ----------------------------------------------------- |
-| `apps/pos`            | Desktop POS shell (React, Vite, Tauri)                |
-| `packages/database`   | SQLite, Drizzle schema, migrations, initialization    |
-| `packages/domain`     | Framework-independent restaurant business modules     |
-| `packages/ui`         | Shared React and shadcn/ui-style UI primitives        |
-| `packages/printing`   | Printer capability and document abstractions          |
-| `packages/validation` | Shared Zod schemas                                    |
-| `packages/config`     | Shared TypeScript configuration                       |
-| `packages/tooling`    | Reserved for minimal shared tooling as the repo grows |
+| Workspace             | Purpose                                                |
+| --------------------- | ------------------------------------------------------ |
+| `apps/pos`            | Desktop POS shell (React, Vite, Tauri)                 |
+| `packages/database`   | SQLite, Drizzle schema, migrations, seed, repositories |
+| `packages/domain`     | Framework-independent restaurant business modules      |
+| `packages/ui`         | Shared React and shadcn/ui-style UI primitives         |
+| `packages/printing`   | Printer capability and document abstractions           |
+| `packages/validation` | Shared Zod schemas                                     |
+| `packages/config`     | Shared TypeScript configuration                        |
+| `packages/tooling`    | Reserved for minimal shared tooling as the repo grows  |
 
 ## Getting started
 
@@ -45,5 +45,17 @@ pnpm typecheck
 pnpm lint
 pnpm test
 ```
+
+## Local database development
+
+SQLite is the initial local source of truth. The database package stores GHS values as integer pesewas, UTC ISO timestamps, and application-generated string IDs. Its checked-in Drizzle migrations create business-scoped records for staff, menu, seating, orders, kitchen tickets, payments/receipts, inventory, and stock movements.
+
+Generate a schema migration after an intentional schema change:
+
+```bash
+pnpm --filter @ate05/database db:generate
+```
+
+See [`packages/database/README.md`](packages/database/README.md) for numbering, history, and transaction-boundary decisions. Development seed data is separate from normal initialization.
 
 The repository deliberately has no backend server, cloud API, authentication provider, or microservice. Future kitchen-display, back-office, waiter, and sync applications can reuse `domain`, `database`, `validation`, and `ui` without putting business rules in the POS shell.

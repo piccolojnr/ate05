@@ -1,2 +1,6 @@
-/** Future kitchen domain rules live here. */
-export {};
+export const kitchenTicketTypes = [
+  "initial",
+  "addition",
+  "cancellation",
+] as const;
+export type KitchenTicketType = (typeof kitchenTicketTypes)[number];
