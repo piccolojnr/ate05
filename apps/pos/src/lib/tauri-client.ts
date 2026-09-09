@@ -1,4 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
+import { invoke } from "@tauri-apps/api/core";
 import {
   calculateKitchenDeltas,
   calculateOrderTotals,
@@ -12,7 +13,9 @@ import type {
   PosBootstrap,
   PosClient,
   PosOrder,
+  PosPrinterConfig,
 } from "./pos-client";
+import type { PaperWidth } from "@ate05/printing";
 
 const databaseUrl = "sqlite:ate05.db";
 const businessId = "00000000-0000-4000-8000-000000000001";
@@ -178,7 +181,7 @@ async function getKitchenTickets(
 ): Promise<KitchenTicket[]> {
   const tickets = await select<Row>(
     db,
-    "SELECT id, sequence, type, print_status AS printStatus, printed_at AS printedAt, created_at AS createdAt FROM kitchen_tickets WHERE order_id = $1 AND business_id = $2 ORDER BY sequence",
+    "SELECT id, sequence, type, print_status AS printStatus, printed_at AS printedAt, last_print_error AS lastPrintError, print_attempt_count AS printAttemptCount, last_attempt_at AS lastAttemptAt, created_at AS createdAt FROM kitchen_tickets WHERE order_id = $1 AND business_id = $2 ORDER BY sequence",
     [orderId, businessId],
   );
   const result: KitchenTicket[] = [];
@@ -195,6 +198,9 @@ async function getKitchenTickets(
       printStatus: asString(ticket.printStatus) as KitchenTicket["printStatus"],
       printedAt: asNullableString(ticket.printedAt),
       createdAt: asString(ticket.createdAt),
+      lastPrintError: asNullableString(ticket.lastPrintError),
+      printAttemptCount: asNumber(ticket.printAttemptCount),
+      lastAttemptAt: asNullableString(ticket.lastAttemptAt),
       items: items.map((item) => ({
         id: asString(item.id),
         orderItemId: asNullableString(item.orderItemId),
@@ -206,6 +212,111 @@ async function getKitchenTickets(
     });
   }
   return result;
+}
+
+function mapPrinter(row: Row): PosPrinterConfig {
+  return {
+    id: asString(row.id),
+    businessId: asString(row.businessId),
+    name: asString(row.name),
+    role: asString(row.role) as "kitchen" | "receipt",
+    connectionType: asString(row.connectionType) as "network" | "usb",
+    address: asString(row.address),
+    port:
+      row.port === null || row.port === undefined ? null : asNumber(row.port),
+    paperWidth: asNumber(row.paperWidth) as PaperWidth,
+    cutterEnabled: Boolean(asNumber(row.cutterEnabled)),
+    active: Boolean(asNumber(row.active)),
+  };
+}
+
+async function getActiveKitchenPrinter(
+  db: SqlDatabase,
+): Promise<PosPrinterConfig | null> {
+  const [row] = await select<Row>(
+    db,
+    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'kitchen' AND active = 1 ORDER BY created_at LIMIT 1",
+    [businessId],
+  );
+  return row ? mapPrinter(row) : null;
+}
+
+function nativePrinterRequest(printer: PosPrinterConfig) {
+  return {
+    connectionType: printer.connectionType,
+    address: printer.address,
+    port: printer.port,
+    paperWidth: printer.paperWidth,
+    cutterEnabled: printer.cutterEnabled,
+  };
+}
+
+async function attemptKitchenPrint(
+  db: SqlDatabase,
+  order: PosOrder,
+  ticket: KitchenTicket,
+  printer: PosPrinterConfig | null,
+  reprint = false,
+): Promise<void> {
+  if (ticket.printStatus === "printed" && !reprint) return;
+  const attemptAt = timestamp();
+  await execute(
+    db,
+    reprint
+      ? "UPDATE kitchen_tickets SET print_attempt_count = print_attempt_count + 1, last_attempt_at = $1, updated_at = $1 WHERE id = $2 AND business_id = $3"
+      : "UPDATE kitchen_tickets SET print_status = 'pending', print_attempt_count = print_attempt_count + 1, last_attempt_at = $1, last_print_error = NULL, updated_at = $1 WHERE id = $2 AND business_id = $3",
+    [attemptAt, ticket.id, businessId],
+  );
+  if (!printer) {
+    await execute(
+      db,
+      reprint
+        ? "UPDATE kitchen_tickets SET last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4"
+        : "UPDATE kitchen_tickets SET print_status = 'failed', last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4",
+      [
+        "No active kitchen printer is configured.",
+        attemptAt,
+        ticket.id,
+        businessId,
+      ],
+    );
+    return;
+  }
+  const payload = {
+    orderNumber: order.orderNumber,
+    tableName: order.tableName,
+    sequence: ticket.sequence,
+    ticketType: ticket.type,
+    createdAt: ticket.createdAt,
+    items: ticket.items.map((item) => ({
+      itemName: item.itemName,
+      quantity: item.quantity,
+      action: item.action,
+      notes: item.notes,
+    })),
+  };
+  try {
+    await invoke("print_kitchen_ticket", {
+      request: nativePrinterRequest(printer),
+      ticket: payload,
+    });
+    await execute(
+      db,
+      reprint
+        ? "UPDATE kitchen_tickets SET last_print_error = NULL, updated_at = $1 WHERE id = $2 AND business_id = $3"
+        : "UPDATE kitchen_tickets SET print_status = 'printed', printed_at = $1, last_print_error = NULL, updated_at = $1 WHERE id = $2 AND business_id = $3",
+      [attemptAt, ticket.id, businessId],
+    );
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    await execute(
+      db,
+      reprint
+        ? "UPDATE kitchen_tickets SET last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4"
+        : "UPDATE kitchen_tickets SET print_status = 'failed', last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4",
+      [message.slice(0, 500), attemptAt, ticket.id, businessId],
+    );
+  }
 }
 async function getKitchenSyncLines(
   db: SqlDatabase,
@@ -593,8 +704,10 @@ export function createTauriClient(): PosClient {
           [orderId],
         );
         let sequence = asNumber(sequenceRow?.sequence) || 1;
+        const newTicketIds: string[] = [];
         for (const delta of deltas) {
           const ticketId = crypto.randomUUID();
+          newTicketIds.push(ticketId);
           const createdAt = timestamp();
           await execute(
             db,
@@ -632,11 +745,119 @@ export function createTauriClient(): PosClient {
           [timestamp(), orderId, businessId],
         );
         await execute(db, "COMMIT");
+        const committed = await getOrder(db, orderId);
+        const printer = await getActiveKitchenPrinter(db);
+        for (const ticket of committed.kitchenTickets.filter((ticket) =>
+          newTicketIds.includes(ticket.id),
+        ))
+          await attemptKitchenPrint(db, committed, ticket, printer);
         return getOrder(db, orderId);
       } catch (error) {
         await execute(db, "ROLLBACK");
         throw error;
       }
+    },
+    async listPrinters() {
+      const db = await database();
+      const rows = await select<Row>(
+        db,
+        "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 ORDER BY role, name",
+        [businessId],
+      );
+      return rows.map(mapPrinter);
+    },
+    async savePrinter(input) {
+      if (!input.name.trim() || !input.address.trim())
+        throw new PosClientError(
+          "validation",
+          "Printer name and address are required.",
+        );
+      if (
+        input.connectionType === "network" &&
+        (!input.port || input.port < 1 || input.port > 65535)
+      )
+        throw new PosClientError(
+          "validation",
+          "A network printer needs a valid port.",
+        );
+      if (input.paperWidth !== 58 && input.paperWidth !== 80)
+        throw new PosClientError(
+          "validation",
+          "Paper width must be 58mm or 80mm.",
+        );
+      const db = await database();
+      const id = input.id ?? crypto.randomUUID();
+      const now = timestamp();
+      await execute(
+        db,
+        "INSERT INTO printers (id, business_id, name, role, connection_type, address, port, paper_width, cutter_enabled, active, created_at, updated_at) VALUES ($1, $2, $3, 'kitchen', $4, $5, $6, $7, $8, $9, $10, $10) ON CONFLICT(id) DO UPDATE SET name = excluded.name, connection_type = excluded.connection_type, address = excluded.address, port = excluded.port, paper_width = excluded.paper_width, cutter_enabled = excluded.cutter_enabled, active = excluded.active, updated_at = excluded.updated_at WHERE printers.business_id = excluded.business_id",
+        [
+          id,
+          businessId,
+          input.name.trim(),
+          input.connectionType,
+          input.address.trim(),
+          input.port,
+          input.paperWidth,
+          input.cutterEnabled ? 1 : 0,
+          input.active ? 1 : 0,
+          now,
+        ],
+      );
+      const printers = await this.listPrinters();
+      const saved = printers.find((printer) => printer.id === id);
+      if (!saved)
+        throw new PosClientError("database", "Printer could not be saved.");
+      return saved;
+    },
+    async testPrinter(printerId) {
+      const db = await database();
+      const [row] = await select<Row>(
+        db,
+        "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE id = $1 AND business_id = $2",
+        [printerId, businessId],
+      );
+      if (!row) throw new PosClientError("not_found", "Printer not found.");
+      const printer = mapPrinter(row);
+      if (!printer.active)
+        throw new PosClientError("invalid_state", "Printer is disabled.");
+      try {
+        await invoke("test_printer", {
+          request: nativePrinterRequest(printer),
+          createdAt: timestamp(),
+        });
+      } catch (cause) {
+        throw new PosClientError("database", String(cause));
+      }
+    },
+    async retryPendingKitchenPrints() {
+      const db = await database();
+      const rows = await select<Row>(
+        db,
+        "SELECT DISTINCT order_id AS orderId FROM kitchen_tickets WHERE business_id = $1 AND print_status <> 'printed' ORDER BY order_id",
+        [businessId],
+      );
+      const printer = await getActiveKitchenPrinter(db);
+      const orders: PosOrder[] = [];
+      for (const row of rows) {
+        const order = await getOrder(db, asString(row.orderId));
+        for (const ticket of order.kitchenTickets)
+          if (ticket.printStatus !== "printed")
+            await attemptKitchenPrint(db, order, ticket, printer);
+        orders.push(await getOrder(db, order.id));
+      }
+      return orders;
+    },
+    async reprintKitchenTicket(orderId, ticketId) {
+      const db = await database();
+      const order = await getOrder(db, orderId);
+      const ticket = order.kitchenTickets.find(
+        (entry) => entry.id === ticketId,
+      );
+      if (!ticket)
+        throw new PosClientError("not_found", "Kitchen ticket not found.");
+      const printer = await getActiveKitchenPrinter(db);
+      await attemptKitchenPrint(db, order, ticket, printer, true);
     },
   };
 }

@@ -5,5 +5,6 @@ export * from "./menu";
 export * from "./metadata";
 export * from "./orders";
 export * from "./payments";
+export * from "./printers";
 export * from "./seating";
 export * from "./users";

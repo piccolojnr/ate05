@@ -9,14 +9,20 @@ export function OrderPanel({
   onNoteChange,
   onSendToKitchen,
   sendingToKitchen,
+  onReprintTicket,
 }: {
   order: PosOrder | null;
   onQuantityChange: (id: string, quantity: number) => void;
   onNoteChange: (id: string, notes: string) => void;
   onSendToKitchen: () => void;
   sendingToKitchen: boolean;
+  onReprintTicket: (ticketId: string) => void;
 }) {
   const items = order?.items ?? [];
+  const pendingPrints =
+    order?.kitchenTickets.filter(
+      (ticket) => ticket.printStatus !== "printed",
+    ) ?? [];
   return (
     <aside
       className="flex min-h-0 w-[380px] shrink-0 flex-col rounded-lg border bg-card shadow-card max-xl:w-[340px] max-lg:hidden"
@@ -44,9 +50,19 @@ export function OrderPanel({
           </Badge>
           {order?.tableName ? <Badge>{order.tableName}</Badge> : null}
           {order ? (
-            <Badge tone={order.kitchenChangesPending ? "warning" : "success"}>
+            <Badge
+              tone={
+                order.kitchenChangesPending || pendingPrints.length
+                  ? "warning"
+                  : "success"
+              }
+            >
               Kitchen:{" "}
-              {order.kitchenChangesPending ? "Changes pending" : "Sent"}
+              {order.kitchenChangesPending
+                ? "Changes pending"
+                : pendingPrints.length
+                  ? `${pendingPrints.length} print${pendingPrints.length === 1 ? "" : "s"} pending`
+                  : "Sent"}
             </Badge>
           ) : null}
         </div>
@@ -134,6 +150,16 @@ export function OrderPanel({
                         ? "Unprinted"
                         : ticket.printStatus}
                     </span>
+                    {ticket.printStatus === "printed" ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="ml-2 h-6 px-1.5 text-[10px]"
+                        onClick={() => onReprintTicket(ticket.id)}
+                      >
+                        Reprint
+                      </Button>
+                    ) : null}
                   </div>
                   {ticket.items.map((item) => (
                     <p key={item.id} className="text-muted-foreground">

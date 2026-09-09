@@ -17,7 +17,9 @@ test("cashier can create, persist, and reopen a local order", async ({
   await page.getByLabel("Note for Fried Rice").blur();
   await page.waitForTimeout(100);
   await page.getByRole("button", { name: "Send to Kitchen" }).click();
-  await expect(page.getByLabel("Current order")).toContainText("Kitchen: Sent");
+  await expect(page.getByLabel("Current order")).toContainText(
+    "1 print pending",
+  );
   await page.getByRole("button", { name: "Add Chicken Wings" }).click();
   await expect(page.getByLabel("Current order")).toContainText(
     "Changes pending",

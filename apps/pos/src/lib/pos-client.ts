@@ -1,4 +1,5 @@
 export type OrderType = "dine_in" | "takeaway";
+import type { PrinterConfig, PaperWidth } from "@ate05/printing";
 
 export interface MenuCategory {
   id: string;
@@ -69,8 +70,13 @@ export interface KitchenTicket {
   printStatus: "pending" | "printed" | "failed";
   printedAt: string | null;
   createdAt: string;
+  lastPrintError: string | null;
+  printAttemptCount: number;
+  lastAttemptAt: string | null;
   items: KitchenTicketItem[];
 }
+
+export type PosPrinterConfig = PrinterConfig;
 
 export interface PosBootstrap {
   businessId: string;
@@ -102,6 +108,20 @@ export interface PosClient {
   ): Promise<PosOrder>;
   removeOrderItem(orderId: string, itemId: string): Promise<PosOrder>;
   sendOrderToKitchen(orderId: string): Promise<PosOrder>;
+  listPrinters(): Promise<PosPrinterConfig[]>;
+  savePrinter(input: {
+    id?: string;
+    name: string;
+    connectionType: "network" | "usb";
+    address: string;
+    port: number | null;
+    paperWidth: PaperWidth;
+    cutterEnabled: boolean;
+    active: boolean;
+  }): Promise<PosPrinterConfig>;
+  testPrinter(printerId: string): Promise<void>;
+  retryPendingKitchenPrints(): Promise<PosOrder[]>;
+  reprintKitchenTicket(orderId: string, ticketId: string): Promise<void>;
 }
 
 export function formatGhs(minor: number): string {

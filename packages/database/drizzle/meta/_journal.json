@@ -8,6 +8,13 @@
       "when": 1788963400907,
       "tag": "0000_clumsy_human_torch",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788984685135,
+      "tag": "0001_chilly_harpoon",
+      "breakpoints": true
     }
   ]
 }

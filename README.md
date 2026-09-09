@@ -69,3 +69,5 @@ Native Linux validation additionally needs the Tauri prerequisites `libwebkit2gt
 The SQLite service itself is initialized with `initializeDatabase`, then explicitly seeded with `seedDevelopmentData` for local development/tests. This keeps production startup from silently adding demo records.
 
 The repository deliberately has no backend server, cloud API, authentication provider, or microservice. Future kitchen-display, back-office, waiter, and sync applications can reuse `domain`, `database`, `validation`, and `ui` without putting business rules in the POS shell.
+
+Kitchen tickets can be sent to a configured network ESC/POS printer over a configurable raw TCP port (commonly 9100). Printing is post-commit: printer failures leave tickets persisted and retryable. USB and Bluetooth printing, customer receipts, and cash drawers are intentionally deferred.

@@ -36,6 +36,7 @@ describe("ATE05 SQLite database", () => {
       )
       .all() as Array<{ name: string }>;
     expect(tables.map((table) => table.name)).toContain("stock_movements");
+    expect(tables.map((table) => table.name)).toContain("printers");
     expect(
       database.sqlite.prepare("SELECT name FROM businesses").get(),
     ).toEqual({ name: "ATE05" });
@@ -122,6 +123,32 @@ describe("ATE05 SQLite database", () => {
         )
         .get(orderId),
     ).toEqual({ count: 2 });
+  });
+
+  it("stores business-scoped kitchen printer configuration separately from tickets", () => {
+    database.sqlite
+      .prepare(
+        "INSERT INTO printers (id, business_id, name, role, connection_type, address, port, paper_width, cutter_enabled, active, created_at, updated_at) VALUES (?, ?, 'Kitchen LAN', 'kitchen', 'network', '192.168.1.50', 9100, 80, 1, 1, ?, ?)",
+      )
+      .run(
+        "00000000-0000-4000-8000-000000000115",
+        developmentSeedIds.business,
+        timestamp,
+        timestamp,
+      );
+    expect(
+      database.sqlite
+        .prepare(
+          "SELECT name, connection_type, port, paper_width, active FROM printers WHERE business_id = ?",
+        )
+        .get(developmentSeedIds.business),
+    ).toEqual({
+      name: "Kitchen LAN",
+      connection_type: "network",
+      port: 9100,
+      paper_width: 80,
+      active: 1,
+    });
   });
 
   it("associates independent payment records with an order", () => {

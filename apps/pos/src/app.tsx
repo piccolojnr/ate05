@@ -6,7 +6,13 @@ import { OrderPanel } from "./components/order-panel";
 import { Sidebar } from "./components/sidebar";
 import { type NavigationItem } from "./data";
 import { getPosClient } from "./lib/get-pos-client";
-import type { OpenOrder, PosBootstrap, PosOrder } from "./lib/pos-client";
+import type {
+  OpenOrder,
+  PosBootstrap,
+  PosClient,
+  PosOrder,
+  PosPrinterConfig,
+} from "./lib/pos-client";
 import {
   InventoryScreen,
   MenuScreen,
@@ -20,6 +26,7 @@ const client = getPosClient();
 export function App() {
   const [activeScreen, setActiveScreen] = useState<NavigationItem>("POS");
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(null);
+  const [printers, setPrinters] = useState<PosPrinterConfig[]>([]);
   const [order, setOrder] = useState<PosOrder | null>(null);
   const [category, setCategory] = useState("All");
   const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
@@ -36,7 +43,12 @@ export function App() {
   async function refresh() {
     setLoading(true);
     try {
-      setBootstrap(await client.bootstrap());
+      const [nextBootstrap, nextPrinters] = await Promise.all([
+        client.bootstrap(),
+        client.listPrinters(),
+      ]);
+      setBootstrap(nextBootstrap);
+      setPrinters(nextPrinters);
       setError(null);
     } catch (cause) {
       setError(
@@ -96,6 +108,7 @@ export function App() {
   }
   async function sendToKitchen() {
     if (!order) return;
+    const previousTicketCount = order.kitchenTickets.length;
     setSendingToKitchen(true);
     setError(null);
     setNotice(null);
@@ -103,8 +116,13 @@ export function App() {
       const updated = await client.sendOrderToKitchen(order.id);
       setOrder(updated);
       await refresh();
+      const newTickets = updated.kitchenTickets.slice(previousTicketCount);
       setNotice(
-        `${updated.kitchenTickets.at(-1)?.type === "initial" ? "Initial" : "Kitchen"} ticket sent successfully.`,
+        newTickets.some((ticket) => ticket.printStatus === "failed")
+          ? "Order sent to kitchen, but the printer is offline. Ticket saved and waiting to print."
+          : newTickets.some((ticket) => ticket.printStatus !== "printed")
+            ? "Order sent to kitchen. Ticket saved and waiting to print."
+            : "Kitchen ticket printed.",
       );
     } catch (cause) {
       setError(
@@ -114,6 +132,18 @@ export function App() {
       );
     } finally {
       setSendingToKitchen(false);
+    }
+  }
+  async function reprintTicket(ticketId: string) {
+    if (!order) return;
+    try {
+      await client.reprintKitchenTicket(order.id, ticketId);
+      setOrder(await client.getOrder(order.id));
+      setNotice("Kitchen ticket reprinted.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to reprint ticket.",
+      );
     }
   }
   async function openOrder(summary: OpenOrder) {
@@ -127,6 +157,21 @@ export function App() {
         cause instanceof Error ? cause.message : "Unable to reopen this order.",
       );
     }
+  }
+  async function savePrinter(input: Parameters<PosClient["savePrinter"]>[0]) {
+    setError(null);
+    setPrinters([await client.savePrinter(input)]);
+  }
+  async function testPrinter(printerId: string) {
+    setError(null);
+    await client.testPrinter(printerId);
+  }
+  async function retryPendingPrints() {
+    setError(null);
+    const updatedOrders = await client.retryPendingKitchenPrints();
+    const current = updatedOrders.find((entry) => entry.id === order?.id);
+    if (current) setOrder(current);
+    await refresh();
   }
   const content =
     activeScreen === "POS" ? (
@@ -155,6 +200,7 @@ export function App() {
           onNoteChange={changeNote}
           onSendToKitchen={sendToKitchen}
           sendingToKitchen={sendingToKitchen}
+          onReprintTicket={(ticketId) => void reprintTicket(ticketId)}
         />
       </div>
     ) : (
@@ -170,7 +216,18 @@ export function App() {
         )}
         {activeScreen === "Menu" && <MenuScreen />}
         {activeScreen === "Inventory" && <InventoryScreen />}
-        {activeScreen === "Settings" && <SettingsScreen />}
+        {activeScreen === "Settings" && (
+          <SettingsScreen
+            key={
+              printers.find((printer) => printer.role === "kitchen")?.id ??
+              "no-kitchen-printer"
+            }
+            printers={printers}
+            onSavePrinter={savePrinter}
+            onTestPrinter={testPrinter}
+            onRetryPrints={retryPendingPrints}
+          />
+        )}
       </div>
     );
   return (

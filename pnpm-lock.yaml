@@ -142,6 +142,9 @@ importers:
       '@ate05/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@ate05/printing':
+        specifier: workspace:*
+        version: link:../../packages/printing
       '@ate05/ui':
         specifier: workspace:*
         version: link:../../packages/ui

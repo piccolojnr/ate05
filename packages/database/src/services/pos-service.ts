@@ -26,6 +26,9 @@ export interface PosKitchenTicket {
   type: KitchenTicketType;
   printStatus: KitchenPrintStatus;
   printedAt: string | null;
+  lastPrintError: string | null;
+  printAttemptCount: number;
+  lastAttemptAt: string | null;
   createdAt: string;
   items: PosKitchenTicketItem[];
 }
@@ -429,7 +432,7 @@ export function createPosService(sqlite: Database.Database) {
   ): PosKitchenTicket[] {
     const tickets = sqlite
       .prepare(
-        "SELECT id, sequence, type, print_status AS printStatus, printed_at AS printedAt, created_at AS createdAt FROM kitchen_tickets WHERE order_id = ? AND business_id = ? ORDER BY sequence",
+        "SELECT id, sequence, type, print_status AS printStatus, printed_at AS printedAt, last_print_error AS lastPrintError, print_attempt_count AS printAttemptCount, last_attempt_at AS lastAttemptAt, created_at AS createdAt FROM kitchen_tickets WHERE order_id = ? AND business_id = ? ORDER BY sequence",
       )
       .all(orderId, businessId) as Array<{
       id: string;
@@ -437,6 +440,9 @@ export function createPosService(sqlite: Database.Database) {
       type: KitchenTicketType;
       printStatus: KitchenPrintStatus;
       printedAt: string | null;
+      lastPrintError: string | null;
+      printAttemptCount: number;
+      lastAttemptAt: string | null;
       createdAt: string;
     }>;
     const itemQuery = sqlite.prepare(

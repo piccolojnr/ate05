@@ -5,8 +5,10 @@ import type {
   PosBootstrap,
   PosClient,
   PosOrder,
+  PosPrinterConfig,
   RestaurantTable,
 } from "./pos-client";
+import type { PaperWidth } from "@ate05/printing";
 import { calculateKitchenDeltas, type KitchenSyncLine } from "@ate05/domain";
 
 const storageKey = "ate05-pos-browser-preview-v1";
@@ -16,6 +18,7 @@ const createdBy = "00000000-0000-4000-8000-000000000002";
 interface PreviewState {
   nextOrderNumber: number;
   orders: PosOrder[];
+  printers: PosPrinterConfig[];
 }
 
 const categories: MenuCategory[] = [
@@ -64,9 +67,15 @@ function readState(): PreviewState {
   const raw = window.localStorage.getItem(storageKey);
   const state = raw
     ? (JSON.parse(raw) as PreviewState)
-    : { nextOrderNumber: 1, orders: [] };
+    : { nextOrderNumber: 1, orders: [], printers: [] };
+  state.printers ??= [];
   for (const order of state.orders) {
     order.kitchenTickets ??= [];
+    for (const ticket of order.kitchenTickets) {
+      ticket.lastPrintError ??= null;
+      ticket.printAttemptCount ??= 0;
+      ticket.lastAttemptAt ??= null;
+    }
     order.kitchenChangesPending ??= false;
   }
   return state;
@@ -325,6 +334,9 @@ export function createBrowserPreviewClient(): PosClient {
         printStatus: "pending",
         printedAt: null,
         createdAt,
+        lastPrintError: null,
+        printAttemptCount: 0,
+        lastAttemptAt: null,
         items: delta.items.map((item) => ({
           id: crypto.randomUUID(),
           orderItemId: item.orderItemId,
@@ -347,6 +359,47 @@ export function createBrowserPreviewClient(): PosClient {
       );
       writeState(state);
       return updated;
+    },
+    async listPrinters() {
+      return readState().printers;
+    },
+    async savePrinter(input) {
+      const state = readState();
+      const printer: PosPrinterConfig = {
+        id: input.id ?? crypto.randomUUID(),
+        businessId,
+        name: input.name.trim(),
+        role: "kitchen",
+        connectionType: input.connectionType,
+        address: input.address.trim(),
+        port: input.port,
+        paperWidth: input.paperWidth as PaperWidth,
+        cutterEnabled: input.cutterEnabled,
+        active: input.active,
+      };
+      state.printers = [
+        ...state.printers.filter((entry) => entry.id !== printer.id),
+        printer,
+      ];
+      writeState(state);
+      return printer;
+    },
+    async testPrinter(printerId) {
+      if (!readState().printers.some((printer) => printer.id === printerId))
+        throw new Error("Printer not found.");
+    },
+    async retryPendingKitchenPrints() {
+      return readState().orders.filter((order) =>
+        order.kitchenTickets.some((ticket) => ticket.printStatus !== "printed"),
+      );
+    },
+    async reprintKitchenTicket(orderId, ticketId) {
+      const order = readState().orders.find((entry) => entry.id === orderId);
+      if (
+        !order ||
+        !order.kitchenTickets.some((ticket) => ticket.id === ticketId)
+      )
+        throw new Error("Kitchen ticket not found.");
     },
   };
 }
