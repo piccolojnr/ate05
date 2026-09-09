@@ -349,7 +349,12 @@ export function OrderPanel({
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+      <div
+        aria-label="Order items"
+        role="region"
+        tabIndex={0}
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         {items.length === 0 ? (
           <div className="grid min-h-40 place-items-center rounded-md border border-dashed bg-muted/30 p-5 text-center">
             <div>
@@ -368,9 +373,6 @@ export function OrderPanel({
             onNoteChange={(notes) => onNoteChange(line.id, notes)}
           />
         ))}
-      </div>
-
-      <div className="shrink-0 space-y-3 border-t p-4">
         {order && order.amountDueMinor > 0 ? (
           <PaymentPanel
             order={order}
@@ -395,6 +397,11 @@ export function OrderPanel({
             <p className="mt-1 text-xs text-muted-foreground">
               Paid {formatGhs(order.amountPaidMinor)}
             </p>
+            {order.receipt.printStatus !== "printed" ? (
+              <p className="mt-1 text-xs text-warning">
+                Receipt saved · Print pending
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -442,7 +449,8 @@ export function OrderPanel({
             </div>
           </details>
         ) : null}
-
+      </div>
+      <div className="shrink-0 space-y-3 border-t p-4">
         <OrderTotals order={order} />
         <div className="grid grid-cols-2 gap-2">
           <Button

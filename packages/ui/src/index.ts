@@ -8,3 +8,4 @@ export { Card } from "./components/card";
 export { Input } from "./components/input";
 export type { InputProps } from "./components/input";
 export { cn } from "./lib/cn";
+export { Toaster, toast } from "./components/sonner";

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Badge, Button, Card } from "@ate05/ui";
+import { notify } from "../lib/notifications";
 import { PageHeader } from "../components/page-header";
 import { StatusBadge } from "../components/status-badge";
 import {
@@ -428,7 +429,6 @@ export function SettingsScreen({
     kitchenPrinter?.cutterEnabled ?? true,
   );
   const [active, setActive] = useState(kitchenPrinter?.active ?? true);
-  const [message, setMessage] = useState<string | null>(null);
   async function save() {
     try {
       await onSavePrinter({
@@ -441,9 +441,9 @@ export function SettingsScreen({
         cutterEnabled,
         active,
       });
-      setMessage("Kitchen printer saved.");
+      notify.success("Kitchen printer saved.");
     } catch (cause) {
-      setMessage(
+      notify.error(
         cause instanceof Error ? cause.message : "Unable to save printer.",
       );
     }
@@ -452,9 +452,9 @@ export function SettingsScreen({
     if (!kitchenPrinter) return;
     try {
       await onTestPrinter(kitchenPrinter.id);
-      setMessage("Printer connection successful.");
+      notify.success("Printer connection successful.");
     } catch (cause) {
-      setMessage(
+      notify.error(
         cause instanceof Error ? cause.message : "Printer test failed.",
       );
     }
@@ -558,11 +558,6 @@ export function SettingsScreen({
             Retry receipt prints
           </Button>
         </div>
-        {message ? (
-          <p role="status" className="mt-3 text-sm text-muted-foreground">
-            {message}
-          </p>
-        ) : null}
       </Card>
       <ReceiptPrinterSettings
         printer={printers.find((printer) => printer.role === "receipt")}
@@ -599,7 +594,6 @@ function ReceiptPrinterSettings({
     printer?.paperWidth ?? 80,
   );
   const [active, setActive] = useState(printer?.active ?? true);
-  const [message, setMessage] = useState<string | null>(null);
   async function save() {
     try {
       await onSavePrinter({
@@ -613,9 +607,9 @@ function ReceiptPrinterSettings({
         cutterEnabled: printer?.cutterEnabled ?? true,
         active,
       });
-      setMessage("Receipt printer saved.");
+      notify.success("Receipt printer saved.");
     } catch (cause) {
-      setMessage(
+      notify.error(
         cause instanceof Error
           ? cause.message
           : "Unable to save receipt printer.",
@@ -697,11 +691,6 @@ function ReceiptPrinterSettings({
           Test Print
         </Button>
       </div>
-      {message ? (
-        <p role="status" className="mt-3 text-sm text-muted-foreground">
-          {message}
-        </p>
-      ) : null}
     </Card>
   );
 }

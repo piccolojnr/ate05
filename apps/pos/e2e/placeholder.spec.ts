@@ -41,7 +41,12 @@ test("cashier can create, persist, and reopen a local order", async ({
     "Receipt #000001",
   );
   await page.getByRole("button", { name: "Reprint Receipt" }).click();
-  await expect(page.getByRole("status")).toContainText("Receipt reprinted");
+  await expect(
+    page
+      .getByRole("region", { name: /Notifications/ })
+      .getByRole("listitem")
+      .filter({ hasText: "Receipt reprinted" }),
+  ).toBeVisible();
   await page.reload();
   await page.getByRole("button", { name: "Orders" }).click();
   await page.getByRole("button", { name: "Open Order" }).first().click();

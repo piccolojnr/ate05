@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run --passWithNoTests --exclude e2e/**",
+    "test": "vitest run --passWithNoTests --exclude 'e2e/**'",
     "lint": "eslint src e2e --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri"

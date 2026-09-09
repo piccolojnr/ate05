@@ -1,4 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
+import { serializeClient } from "./serialize-client";
 import { invoke } from "@tauri-apps/api/core";
 import {
   calculateKitchenDeltas,
@@ -52,6 +53,44 @@ function asNumber(value: unknown): number {
 function asNullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
+function errorDetail(cause: unknown): string {
+  if (cause instanceof Error) return cause.message;
+  if (typeof cause === "string") return cause;
+  try {
+    return JSON.stringify(cause);
+  } catch {
+    return String(cause);
+  }
+}
+function databaseWriteMessage(detail: string): string {
+  const normalized = detail.toLowerCase();
+  if (normalized.includes("locked") || normalized.includes("busy"))
+    return "Local database is busy. Close other ATE05 windows and try again.";
+  if (normalized.includes("readonly") || normalized.includes("read-only"))
+    return "Local database is read-only. Check the app data folder permissions.";
+  if (
+    normalized.includes("no such table") ||
+    normalized.includes("no such column") ||
+    normalized.includes("migration")
+  )
+    return "Local database schema is out of date. Restart ATE05 to apply migrations.";
+  return "Local database could not save this change.";
+}
+function reportDatabaseFailure(
+  operation: string,
+  cause: unknown,
+): PosClientError {
+  const detail = errorDetail(cause);
+  console.error("[ATE05] local database write failed", {
+    operation,
+    detail,
+  });
+  const message = databaseWriteMessage(detail);
+  return new PosClientError(
+    "database",
+    import.meta.env.DEV && detail ? `${message} (${detail})` : message,
+  );
+}
 function inventoryState(
   quantity: number,
   threshold: number | null,
@@ -87,7 +126,8 @@ function mapStockMovement(row: Row): StockMovement {
   };
 }
 async function database(): Promise<SqlDatabase> {
-  databasePromise ??= Database.load(databaseUrl);
+  // Rust preloads/migrates and configures the pool. load() would replace it.
+  databasePromise ??= Promise.resolve(Database.get(databaseUrl));
   return databasePromise;
 }
 async function listInventoryRows(db: SqlDatabase): Promise<InventoryItem[]> {
@@ -119,11 +159,8 @@ async function execute(
 ): Promise<void> {
   try {
     await db.execute(sql, values);
-  } catch {
-    throw new PosClientError(
-      "database",
-      "Local database could not save this change.",
-    );
+  } catch (cause) {
+    throw reportDatabaseFailure(sql.replace(/\s+/g, " ").slice(0, 160), cause);
   }
 }
 
@@ -670,7 +707,7 @@ async function recordInventoryMovementNative(
 
 /** Native-only adapter. Fixed operations are the only SQL sent through Tauri. */
 export function createTauriClient(): PosClient {
-  return {
+  const client: PosClient = {
     async bootstrap(): Promise<PosBootstrap> {
       const db = await database();
       await ensureBootstrap(db);
@@ -1505,4 +1542,5 @@ export function createTauriClient(): PosClient {
       );
     },
   };
+  return serializeClient(client);
 }

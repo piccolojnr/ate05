@@ -7,6 +7,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
+mod database;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -331,6 +332,21 @@ fn main() {
                 .build(),
         )
         .setup(|app| {
+            // Migrations have completed in the SQL plugin's preload setup.
+            // Keep every statement of renderer-managed transactions on one connection.
+            tauri::async_runtime::block_on(async {
+                let pool =
+                    database::connect(&app.path().app_config_dir()?.join("ate05.db")).await?;
+                let instances = app.state::<tauri_plugin_sql::DbInstances>();
+                let previous = instances.0.write().await.insert(
+                    "sqlite:ate05.db".into(),
+                    tauri_plugin_sql::DbPool::Sqlite(pool),
+                );
+                if let Some(tauri_plugin_sql::DbPool::Sqlite(pool)) = previous {
+                    pool.close().await;
+                }
+                Ok::<_, Box<dyn std::error::Error>>(())
+            })?;
             let data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(data_dir.join("backups"))?;
             fs::create_dir_all(data_dir.join("logs"))?;

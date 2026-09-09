@@ -124,7 +124,7 @@ export function MenuCatalog({
 
   return (
     <section
-      className="flex min-w-0 flex-1 flex-col gap-4"
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-4"
       aria-label="Menu catalog"
     >
       <header className="flex items-center justify-between gap-4">
@@ -238,7 +238,12 @@ export function MenuCatalog({
             />
           </label>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto pt-4">
+        <div
+          aria-label="Menu items"
+          role="region"
+          tabIndex={0}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {visibleItems.length ? (
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
               {visibleItems.map((item) => (

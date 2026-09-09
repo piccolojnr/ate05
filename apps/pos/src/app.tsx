@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@ate05/ui";
+import { notify } from "./lib/notifications";
 import { AppShell } from "./components/app-shell";
 import { MenuCatalog } from "./components/menu-catalog";
 import { OrderPanel } from "./components/order-panel";
@@ -31,8 +32,6 @@ export function App() {
   const [category, setCategory] = useState("All");
   const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
   const [tableId, setTableId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [sendingToKitchen, setSendingToKitchen] = useState(false);
   const [loading, setLoading] = useState(true);
   const itemCount = useMemo(
@@ -40,7 +39,7 @@ export function App() {
     [order],
   );
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const [nextBootstrap, nextPrinters] = await Promise.all([
@@ -49,9 +48,8 @@ export function App() {
       ]);
       setBootstrap(nextBootstrap);
       setPrinters(nextPrinters);
-      setError(null);
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error
           ? cause.message
           : "Unable to load local restaurant data.",
@@ -59,13 +57,12 @@ export function App() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => void refresh(), 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [refresh]);
   async function addItem(menuItemId: string) {
-    setNotice(null);
     try {
       const updated = await client.addMenuItem({
         orderId: order?.id,
@@ -76,7 +73,7 @@ export function App() {
       setOrder(updated);
       await refresh();
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error ? cause.message : "Unable to add this item.",
       );
     }
@@ -84,13 +81,12 @@ export function App() {
   async function changeQuantity(itemId: string, quantity: number) {
     if (!order) return;
     try {
-      setNotice(null);
       setOrder(
         await client.updateOrderItemQuantity(order.id, itemId, quantity),
       );
       await refresh();
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error ? cause.message : "Unable to update this item.",
       );
     }
@@ -98,10 +94,9 @@ export function App() {
   async function changeNote(itemId: string, notes: string) {
     if (!order) return;
     try {
-      setNotice(null);
       setOrder(await client.updateOrderItemNote(order.id, itemId, notes));
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error ? cause.message : "Unable to save this note.",
       );
     }
@@ -110,22 +105,26 @@ export function App() {
     if (!order) return;
     const previousTicketCount = order.kitchenTickets.length;
     setSendingToKitchen(true);
-    setError(null);
-    setNotice(null);
     try {
       const updated = await client.sendOrderToKitchen(order.id);
       setOrder(updated);
       await refresh();
       const newTickets = updated.kitchenTickets.slice(previousTicketCount);
-      setNotice(
-        newTickets.some((ticket) => ticket.printStatus === "failed")
-          ? "Order sent to kitchen, but the printer is offline. Ticket saved and waiting to print."
-          : newTickets.some((ticket) => ticket.printStatus !== "printed")
-            ? "Order sent to kitchen. Ticket saved and waiting to print."
-            : "Kitchen ticket printed.",
-      );
+      if (newTickets.some((ticket) => ticket.printStatus === "failed")) {
+        notify.warning(
+          "Order sent to kitchen, but the printer is offline. Ticket saved and waiting to print.",
+        );
+      } else if (
+        newTickets.some((ticket) => ticket.printStatus !== "printed")
+      ) {
+        notify.info(
+          "Order sent to kitchen. Ticket saved and waiting to print.",
+        );
+      } else {
+        notify.success("Kitchen ticket printed.");
+      }
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error
           ? cause.message
           : "Unable to send this order to the kitchen.",
@@ -139,9 +138,9 @@ export function App() {
     try {
       await client.reprintKitchenTicket(order.id, ticketId);
       setOrder(await client.getOrder(order.id));
-      setNotice("Kitchen ticket reprinted.");
+      notify.success("Kitchen ticket reprinted.");
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error ? cause.message : "Unable to reprint ticket.",
       );
     }
@@ -149,13 +148,11 @@ export function App() {
   async function recordPayment(
     input: Parameters<PosClient["recordPayment"]>[0],
   ) {
-    setError(null);
-    setNotice(null);
     try {
       const updated = await client.recordPayment(input);
       setOrder(updated);
       await refresh();
-      setNotice(
+      notify.info(
         updated.paymentStatus === "paid"
           ? updated.receipt?.printStatus === "printed"
             ? "Payment recorded successfully. Receipt printed."
@@ -164,7 +161,7 @@ export function App() {
               formatGhs(updated.amountDueMinor),
       );
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error ? cause.message : "Unable to record payment.",
       );
     }
@@ -174,9 +171,9 @@ export function App() {
     try {
       await client.reprintReceipt(order.id);
       setOrder(await client.getOrder(order.id));
-      setNotice("Receipt reprinted.");
+      notify.success("Receipt reprinted.");
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error ? cause.message : "Unable to reprint receipt.",
       );
     }
@@ -188,7 +185,7 @@ export function App() {
       setTableId(summary.tableId);
       setActiveScreen("POS");
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error ? cause.message : "Unable to reopen this order.",
       );
     }
@@ -198,12 +195,9 @@ export function App() {
     setOrderType("dine_in");
     setTableId(null);
     setCategory("All");
-    setNotice(null);
-    setError(null);
     setActiveScreen("POS");
   }
   async function savePrinter(input: Parameters<PosClient["savePrinter"]>[0]) {
-    setError(null);
     const saved = await client.savePrinter(input);
     setPrinters((current) => [
       ...current.filter((printer) => printer.id !== saved.id),
@@ -211,18 +205,15 @@ export function App() {
     ]);
   }
   async function testPrinter(printerId: string) {
-    setError(null);
     await client.testPrinter(printerId);
   }
   async function retryPendingPrints() {
-    setError(null);
     const updatedOrders = await client.retryPendingKitchenPrints();
     const current = updatedOrders.find((entry) => entry.id === order?.id);
     if (current) setOrder(current);
     await refresh();
   }
   async function retryPendingReceiptPrints() {
-    setError(null);
     const updatedOrders = await client.retryPendingReceiptPrints();
     const current = updatedOrders.find((entry) => entry.id === order?.id);
     if (current) setOrder(current);
@@ -233,19 +224,18 @@ export function App() {
     setBootstrap({ ...bootstrap, inventory: await client.listInventory() });
   }
   async function inventoryAction(action: () => Promise<unknown>) {
-    setError(null);
     try {
       await action();
       await refreshInventory();
     } catch (cause) {
-      setError(
+      notify.error(
         cause instanceof Error ? cause.message : "Unable to update inventory.",
       );
     }
   }
   const content =
     activeScreen === "POS" ? (
-      <div className="flex h-full min-h-0 gap-6">
+      <div className="flex min-h-0 flex-1 gap-6">
         <MenuCatalog
           category={category}
           onCategoryChange={setCategory}
@@ -343,30 +333,14 @@ export function App() {
   return (
     <AppShell active={activeScreen} onNavigate={setActiveScreen}>
       <div
-        className={`min-h-0 flex-1 overflow-auto ${activeScreen === "POS" ? "p-6" : "p-8"}`}
+        className={`min-h-0 flex-1 ${activeScreen === "POS" ? "flex flex-col overflow-hidden p-6" : "overflow-auto p-8"}`}
       >
         <div className="mb-3 flex items-center gap-2 lg:hidden">
           <Badge tone="primary">{itemCount} items in current order</Badge>
         </div>
-        {loading ? (
+        {loading && !bootstrap ? (
           <p className="mb-3 text-sm text-muted-foreground">
             Loading local restaurant data…
-          </p>
-        ) : null}
-        {error ? (
-          <p
-            role="alert"
-            className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-          >
-            {error}
-          </p>
-        ) : null}
-        {notice ? (
-          <p
-            role="status"
-            className="mb-3 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success"
-          >
-            {notice}
           </p>
         ) : null}
         {content}

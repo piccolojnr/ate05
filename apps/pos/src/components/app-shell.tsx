@@ -15,7 +15,9 @@ export function AppShell({
     <main className="flex h-dvh min-h-[680px] overflow-hidden bg-background text-foreground">
       <Sidebar active={active} onNavigate={onNavigate} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {children}
+        </div>
       </div>
     </main>
   );
