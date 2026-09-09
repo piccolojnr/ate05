@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { Badge, Button, Card, Input } from "@ate05/ui";
 import { Icon } from "./icons";
-import { useState } from "react";
+import { StatusBadge } from "./status-badge";
 import {
   formatGhs,
   type PaymentMethod,
@@ -49,12 +50,17 @@ function PaymentPanel({
     }
   }
   return (
-    <div className="mb-4 rounded-md border bg-muted/30 p-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-          Take payment
-        </p>
-        <span className="font-black">
+    <div className="rounded-md border bg-muted/30 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+            Take payment
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Add a payment or settle the balance.
+          </p>
+        </div>
+        <span className="shrink-0 tabular-nums text-sm font-black">
           {formatGhs(order.amountDueMinor)} due
         </span>
       </div>
@@ -74,42 +80,50 @@ function PaymentPanel({
           ),
         )}
       </div>
-      <label className="mt-3 block text-xs font-semibold">
-        Amount
-        <Input
-          aria-label="Payment amount"
-          value={amount}
-          onChange={(event) => setAmount(event.target.value)}
-          type="number"
-          min="0.01"
-          step="0.01"
-        />
-      </label>
-      {method === "cash" ? (
-        <label className="mt-2 block text-xs font-semibold">
-          Cash tendered
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <label className="block text-xs font-semibold">
+          Amount
           <Input
-            value={tendered}
-            onChange={(event) => setTendered(event.target.value)}
+            aria-label="Payment amount"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
             type="number"
-            min="0"
+            min="0.01"
             step="0.01"
-            placeholder={amount}
-          />
-          <span className="mt-1 block text-muted-foreground">
-            Change: {formatGhs(changeMinor)}
-          </span>
-        </label>
-      ) : (
-        <label className="mt-2 block text-xs font-semibold">
-          Reference (optional)
-          <Input
-            value={reference}
-            onChange={(event) => setReference(event.target.value)}
-            placeholder="Transaction reference"
+            className="mt-1 min-h-10"
           />
         </label>
-      )}
+        {method === "cash" ? (
+          <label className="block text-xs font-semibold">
+            Cash tendered
+            <Input
+              value={tendered}
+              onChange={(event) => setTendered(event.target.value)}
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder={amount}
+              className="mt-1 min-h-10"
+            />
+          </label>
+        ) : (
+          <label className="block text-xs font-semibold">
+            Reference
+            <Input
+              value={reference}
+              onChange={(event) => setReference(event.target.value)}
+              placeholder="Optional"
+              className="mt-1 min-h-10"
+            />
+          </label>
+        )}
+      </div>
+      {method === "cash" ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Change:{" "}
+          <strong className="text-foreground">{formatGhs(changeMinor)}</strong>
+        </p>
+      ) : null}
       <Button
         className="mt-3 w-full"
         disabled={
@@ -123,8 +137,8 @@ function PaymentPanel({
         {busy ? "Saving…" : "Confirm Payment"}
       </Button>
       {order.receipt ? (
-        <div className="mt-3 flex items-center justify-between text-xs">
-          <span>
+        <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+          <span className="truncate text-muted-foreground">
             Receipt #{String(order.receipt.receiptNumber).padStart(6, "0")} ·{" "}
             {order.receipt.printStatus}
           </span>
@@ -135,6 +149,127 @@ function PaymentPanel({
           >
             Reprint Receipt
           </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function QuantityControl({
+  name,
+  quantity,
+  onDecrease,
+  onIncrease,
+}: {
+  name: string;
+  quantity: number;
+  onDecrease: () => void;
+  onIncrease: () => void;
+}) {
+  return (
+    <div className="flex items-center rounded-md border bg-muted p-0.5">
+      <Button
+        size="icon"
+        variant="ghost"
+        className="size-9"
+        aria-label={`Decrease ${name}`}
+        onClick={onDecrease}
+      >
+        <Icon name="minus" width="16" height="16" />
+      </Button>
+      <span className="min-w-8 text-center tabular-nums text-sm font-bold">
+        {quantity}
+      </span>
+      <Button
+        size="icon"
+        variant="ghost"
+        className="size-9"
+        aria-label={`Increase ${name}`}
+        onClick={onIncrease}
+      >
+        <Icon name="plus" width="16" height="16" />
+      </Button>
+    </div>
+  );
+}
+
+function OrderItemRow({
+  line,
+  onQuantityChange,
+  onNoteChange,
+}: {
+  line: PosOrder["items"][number];
+  onQuantityChange: (quantity: number) => void;
+  onNoteChange: (notes: string) => void;
+}) {
+  return (
+    <Card className="p-3 shadow-none">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-bold leading-tight">{line.name}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {formatGhs(line.unitPriceMinor)} each
+          </p>
+        </div>
+        <p className="shrink-0 tabular-nums font-black">
+          {formatGhs(line.lineTotalMinor)}
+        </p>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <QuantityControl
+          name={line.name}
+          quantity={line.quantity}
+          onDecrease={() => onQuantityChange(line.quantity - 1)}
+          onIncrease={() => onQuantityChange(line.quantity + 1)}
+        />
+        <button
+          className="min-h-9 rounded px-2 text-xs font-bold text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive"
+          type="button"
+          onClick={() => onQuantityChange(0)}
+        >
+          Remove
+        </button>
+      </div>
+      <Input
+        aria-label={`Note for ${line.name}`}
+        defaultValue={line.notes ?? ""}
+        onBlur={(event) => onNoteChange(event.target.value)}
+        className="mt-3 min-h-9 bg-card text-xs"
+        placeholder="Add note (e.g. no pepper)"
+      />
+    </Card>
+  );
+}
+
+function OrderTotals({ order }: { order: PosOrder | null }) {
+  return (
+    <div className="space-y-1.5 text-sm">
+      <div className="flex justify-between text-muted-foreground">
+        <span>Subtotal</span>
+        <span className="tabular-nums">
+          {formatGhs(order?.subtotalMinor ?? 0)}
+        </span>
+      </div>
+      <div className="flex justify-between rounded-md bg-muted px-3 py-2.5 text-base font-black">
+        <span>Total</span>
+        <span className="tabular-nums">
+          {formatGhs(order?.totalMinor ?? 0)}
+        </span>
+      </div>
+      {order && order.amountPaidMinor > 0 ? (
+        <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
+          <div className="flex justify-between text-muted-foreground">
+            <span>Paid</span>
+            <span className="tabular-nums">
+              {formatGhs(order.amountPaidMinor)}
+            </span>
+          </div>
+          <div className="flex justify-between font-bold text-primary">
+            <span>Remaining</span>
+            <span className="tabular-nums">
+              {formatGhs(order.amountDueMinor)}
+            </span>
+          </div>
         </div>
       ) : null}
     </div>
@@ -167,110 +302,75 @@ export function OrderPanel({
     order?.kitchenTickets.filter(
       (ticket) => ticket.printStatus !== "printed",
     ) ?? [];
+  const kitchenPending = Boolean(order?.kitchenChangesPending);
   return (
     <aside
-      className="flex min-h-0 w-[380px] shrink-0 flex-col rounded-lg border bg-card shadow-card max-xl:w-[340px] max-lg:hidden"
+      className="flex min-h-0 w-[36%] min-w-[410px] max-w-[520px] shrink-0 flex-col overflow-hidden rounded-lg border bg-card shadow-card max-lg:hidden"
       aria-label="Current order"
     >
-      <div className="border-b p-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              Current order
+      <div className="shrink-0 border-b p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">
+              Active order
             </p>
-            <h2 className="mt-1 text-lg font-black">
+            <h2 className="mt-1 truncate text-xl font-black tracking-tight">
               {order
                 ? `#${String(order.orderNumber).padStart(4, "0")}`
                 : "Draft"}
             </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {order
+                ? order.orderType === "dine_in"
+                  ? (order.tableName ?? "Table not selected")
+                  : "TAKEAWAY"
+                : "DINE-IN"}
+            </p>
           </div>
-          <Button size="icon" variant="ghost" aria-label="More order options">
-            <Icon name="more" />
-          </Button>
-        </div>
-        <div className="mt-4 flex gap-2">
-          <Badge tone="primary">
-            {order?.orderType === "dine_in" ? "Dine in" : "Takeaway"}
-          </Badge>
-          {order?.tableName ? <Badge>{order.tableName}</Badge> : null}
           {order ? (
-            <Badge
-              tone={
-                order.kitchenChangesPending || pendingPrints.length
-                  ? "warning"
-                  : "success"
-              }
-            >
-              Kitchen:{" "}
-              {order.kitchenChangesPending
-                ? "Changes pending"
-                : pendingPrints.length
-                  ? `${pendingPrints.length} print${pendingPrints.length === 1 ? "" : "s"} pending`
-                  : "Sent"}
-            </Badge>
+            <StatusBadge kind="payment" value={order.paymentStatus} />
           ) : null}
         </div>
+        {order ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <StatusBadge kind="order" value={order.status} />
+            <Badge
+              tone={
+                kitchenPending || pendingPrints.length ? "warning" : "success"
+              }
+            >
+              {kitchenPending
+                ? "Changes pending"
+                : pendingPrints.length
+                  ? `${pendingPrints.length} print pending${pendingPrints.length === 1 ? "" : "s"}`
+                  : "Kitchen up to date"}
+            </Badge>
+          </div>
+        ) : null}
       </div>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
         {items.length === 0 ? (
-          <p className="p-2 text-sm text-muted-foreground">
-            Choose an item to start an order.
-          </p>
+          <div className="grid min-h-40 place-items-center rounded-md border border-dashed bg-muted/30 p-5 text-center">
+            <div>
+              <p className="font-bold">No items yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Choose an item from the menu to start this order.
+              </p>
+            </div>
+          </div>
         ) : null}
         {items.map((line) => (
-          <Card key={line.id} className="p-3 shadow-none">
-            <div className="flex justify-between gap-3">
-              <div>
-                <p className="font-bold">{line.name}</p>
-                <p className="mt-0.5 text-sm text-muted-foreground">
-                  {formatGhs(line.unitPriceMinor)} each
-                </p>
-              </div>
-              <p className="font-bold">{formatGhs(line.lineTotalMinor)}</p>
-            </div>
-            <div className="mt-3 flex items-center justify-between">
-              <div className="flex items-center rounded-md bg-muted p-0.5">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="min-h-8 px-2"
-                  aria-label={`Decrease ${line.name}`}
-                  onClick={() => onQuantityChange(line.id, line.quantity - 1)}
-                >
-                  <Icon name="minus" width="16" height="16" />
-                </Button>
-                <span className="min-w-7 text-center text-sm font-bold">
-                  {line.quantity}
-                </span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="min-h-8 px-2"
-                  aria-label={`Increase ${line.name}`}
-                  onClick={() => onQuantityChange(line.id, line.quantity + 1)}
-                >
-                  <Icon name="plus" width="16" height="16" />
-                </Button>
-              </div>
-              <button
-                className="text-xs font-bold text-destructive hover:underline"
-                type="button"
-                onClick={() => onQuantityChange(line.id, 0)}
-              >
-                Remove
-              </button>
-            </div>
-            <Input
-              aria-label={`Note for ${line.name}`}
-              defaultValue={line.notes ?? ""}
-              onBlur={(event) => onNoteChange(line.id, event.target.value)}
-              className="mt-3 h-8 bg-card text-xs"
-              placeholder="Add note (e.g. no pepper)"
-            />
-          </Card>
+          <OrderItemRow
+            key={line.id}
+            line={line}
+            onQuantityChange={(quantity) => onQuantityChange(line.id, quantity)}
+            onNoteChange={(notes) => onNoteChange(line.id, notes)}
+          />
         ))}
       </div>
-      <div className="border-t p-5">
+
+      <div className="shrink-0 space-y-3 border-t p-4">
         {order && order.amountDueMinor > 0 ? (
           <PaymentPanel
             order={order}
@@ -278,8 +378,8 @@ export function OrderPanel({
             onReprintReceipt={onReprintReceipt}
           />
         ) : order?.receipt ? (
-          <div className="mb-4 rounded-md border bg-success/10 p-3 text-sm">
-            <div className="flex items-center justify-between font-bold">
+          <div className="rounded-md border bg-success/10 p-3 text-sm">
+            <div className="flex items-center justify-between gap-2 font-bold">
               <span>
                 PAID · Receipt #
                 {String(order.receipt.receiptNumber).padStart(6, "0")}
@@ -292,26 +392,25 @@ export function OrderPanel({
                 Reprint Receipt
               </Button>
             </div>
-            <p className="mt-1 text-muted-foreground">
+            <p className="mt-1 text-xs text-muted-foreground">
               Paid {formatGhs(order.amountPaidMinor)}
             </p>
           </div>
         ) : null}
+
         {order?.kitchenTickets.length ? (
-          <div className="mb-4 rounded-md border bg-muted/30 p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                Kitchen ticket history
-              </p>
-              <span className="text-xs text-muted-foreground">
+          <details className="rounded-md border bg-muted/30 px-3 py-2">
+            <summary className="flex cursor-pointer list-none items-center justify-between text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              <span>Kitchen history</span>
+              <span className="font-normal normal-case tracking-normal">
                 {order.kitchenTickets.length} ticket
                 {order.kitchenTickets.length === 1 ? "" : "s"}
               </span>
-            </div>
-            <div className="max-h-32 space-y-2 overflow-y-auto">
+            </summary>
+            <div className="mt-2 max-h-24 space-y-2 overflow-y-auto border-t pt-2">
               {order.kitchenTickets.map((ticket) => (
                 <div key={ticket.id} className="text-xs">
-                  <div className="flex items-center justify-between font-bold">
+                  <div className="flex items-center justify-between gap-2 font-bold">
                     <span>
                       Ticket #{ticket.sequence} · {ticket.type.toUpperCase()}
                     </span>
@@ -324,7 +423,7 @@ export function OrderPanel({
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="ml-2 h-6 px-1.5 text-[10px]"
+                        className="h-7 px-1.5 text-[10px]"
                         onClick={() => onReprintTicket(ticket.id)}
                       >
                         Reprint
@@ -341,37 +440,29 @@ export function OrderPanel({
                 </div>
               ))}
             </div>
-          </div>
+          </details>
         ) : null}
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between text-muted-foreground">
-            <span>Subtotal</span>
-            <span>{formatGhs(order?.subtotalMinor ?? 0)}</span>
-          </div>
-          <div className="flex justify-between text-muted-foreground">
-            <span>Tax</span>
-            <span>GHS 0.00</span>
-          </div>
-          <div className="flex justify-between rounded-md bg-muted px-3 py-3 text-lg font-black">
-            <span>Total</span>
-            <span>{formatGhs(order?.totalMinor ?? 0)}</span>
-          </div>
-        </div>
-        <div className="mt-5 grid grid-cols-2 gap-3">
+
+        <OrderTotals order={order} />
+        <div className="grid grid-cols-2 gap-2">
           <Button
-            className="w-full !bg-primary hover:!bg-primary/90"
+            variant={kitchenPending ? "secondary" : "ghost"}
+            className="w-full"
             disabled={
               !order ||
               !order.items.length ||
-              !order.kitchenChangesPending ||
+              !kitchenPending ||
               sendingToKitchen
             }
             onClick={onSendToKitchen}
           >
-            {sendingToKitchen ? "Sending…" : "Send to Kitchen"}
+            {sendingToKitchen
+              ? "Sending…"
+              : kitchenPending
+                ? "Send to Kitchen"
+                : "Kitchen Up to Date"}
           </Button>
           <Button
-            variant="secondary"
             className="w-full"
             disabled={!order || order.amountDueMinor <= 0}
             onClick={() =>
@@ -382,7 +473,10 @@ export function OrderPanel({
                 ?.focus()
             }
           >
-            Take Payment <Icon name="arrow" width="17" height="17" />
+            {order?.paymentStatus === "paid" ? "Paid" : "Take Payment"}
+            {order?.paymentStatus !== "paid" ? (
+              <Icon name="arrow" width="17" height="17" />
+            ) : null}
           </Button>
         </div>
       </div>
