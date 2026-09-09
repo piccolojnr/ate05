@@ -1073,7 +1073,7 @@ export function createTauriClient(): PosClient {
             : "partially_paid";
         await execute(
           db,
-          "UPDATE orders SET payment_status = $1, status = CASE WHEN $1 = 'paid' THEN 'completed' ELSE status END, updated_at = $2 WHERE id = $3 AND business_id = $4",
+          "UPDATE orders SET payment_status = $1, updated_at = $2 WHERE id = $3 AND business_id = $4",
           [nextStatus, now, input.orderId, businessId],
         );
         if (nextStatus === "paid") {

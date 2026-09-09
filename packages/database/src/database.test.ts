@@ -173,6 +173,52 @@ describe("ATE05 SQLite database", () => {
     ).toEqual({ amount_minor: 4000, method: "cash" });
   });
 
+  it.each([
+    ["sent_to_kitchen", "1"],
+    ["preparing", "2"],
+    ["ready", "3"],
+  ] as const)(
+    "keeps operational status %s when payment becomes fully paid",
+    (status, suffix) => {
+      const orderId = insertOrder(
+        "00000000-0000-4000-8000-00000000012" + suffix,
+      );
+      database.sqlite
+        .prepare("UPDATE orders SET status = ? WHERE id = ?")
+        .run(status, orderId);
+      database.sqlite
+        .prepare(
+          "INSERT INTO payments (id, business_id, order_id, amount_minor, method, status, idempotency_key, received_by, received_at, created_at, updated_at) VALUES (?, ?, ?, 10000, 'cash', 'recorded', ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "00000000-0000-4000-8000-00000000013" + suffix,
+          developmentSeedIds.business,
+          orderId,
+          "lifecycle-" + status,
+          developmentSeedIds.owner,
+          timestamp,
+          timestamp,
+          timestamp,
+        );
+      database.sqlite
+        .prepare("UPDATE orders SET payment_status = 'paid' WHERE id = ?")
+        .run(orderId);
+      expect(
+        database.sqlite
+          .prepare("SELECT status, payment_status FROM orders WHERE id = ?")
+          .get(orderId),
+      ).toEqual({ status, payment_status: "paid" });
+      database.sqlite
+        .prepare("UPDATE orders SET status = 'completed' WHERE id = ?")
+        .run(orderId);
+      expect(
+        database.sqlite
+          .prepare("SELECT status, payment_status FROM orders WHERE id = ?")
+          .get(orderId),
+      ).toEqual({ status: "completed", payment_status: "paid" });
+    },
+  );
+
   it("keeps stock movements as inventory audit history alongside a maintained balance", () => {
     database.sqlite.transaction(() => {
       database.sqlite

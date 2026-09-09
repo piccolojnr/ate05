@@ -467,7 +467,6 @@ export function createBrowserPreviewClient(): PosClient {
       order.paymentStatus =
         order.amountDueMinor === 0 ? "paid" : "partially_paid";
       if (order.amountDueMinor === 0) {
-        order.status = "completed";
         order.receipt = {
           id: order.receipt?.id ?? crypto.randomUUID(),
           receiptNumber:
