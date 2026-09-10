@@ -103,26 +103,59 @@ test("cashier can receive, issue, and inspect inventory movements", async ({
   );
   await page.reload();
   await page.getByRole("button", { name: "Inventory" }).click();
+  await page.getByRole("button", { name: "New Inventory Item" }).click();
   await page.getByLabel("Inventory item name").fill("Rice stock");
   await page.getByLabel("Inventory unit").selectOption("g");
   await page.getByLabel("Starting quantity").fill("10000");
   await page.getByLabel("Reorder threshold").fill("2000");
   await page.getByRole("button", { name: "Create item" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Rice stock · 10000 g" }),
-  ).toBeVisible();
-  await page.getByLabel("Stock action").selectOption("receive");
+  await expect(page.getByRole("heading", { name: "Rice stock" })).toBeVisible();
+  await expect(page.getByText("10,000 g").first()).toBeVisible();
+  await page.getByRole("button", { name: "Receive Stock" }).click();
   await page.getByLabel("Movement quantity").fill("3000");
   await page.getByRole("button", { name: "Save movement" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Rice stock · 13000 g" }),
-  ).toBeVisible();
-  await page.getByLabel("Stock action").selectOption("issue");
+  await expect(page.getByText("13,000 g").first()).toBeVisible();
+  await page.getByRole("button", { name: "Issue to Kitchen" }).click();
   await page.getByLabel("Movement quantity").fill("1000");
   await page.getByRole("button", { name: "Save movement" }).click();
+  await expect(page.getByText("12,000 g").first()).toBeVisible();
+  await expect(page.getByText("Receive").first()).toBeVisible();
+  await expect(page.getByText("Kitchen issue").first()).toBeVisible();
+});
+
+test("operator can configure independent kitchen and receipt printers", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.removeItem("ate05-pos-browser-preview-v1"),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByText("Not configured").first()).toBeVisible();
+
+  await page.getByLabel("Kitchen Printer name").fill("Kitchen TCP");
+  await page.getByLabel("Kitchen Printer address").fill("kitchen.local");
+  await page.getByRole("button", { name: "Save changes" }).nth(0).click();
+  await expect(page.getByText("Configured · Enabled").first()).toBeVisible();
+  await page.getByRole("button", { name: "Test print" }).nth(0).click();
   await expect(
-    page.getByRole("heading", { name: "Rice stock · 12000 g" }),
+    page.getByText(
+      "Preview test succeeded. No physical printer was contacted.",
+    ),
   ).toBeVisible();
-  await expect(page.getByText(/purchase/).first()).toBeVisible();
-  await expect(page.getByText(/kitchen_issue/).first()).toBeVisible();
+
+  await page.getByLabel("Receipt Printer name").fill("Receipt TCP");
+  await page.getByLabel("Receipt Printer address").fill("receipt.local");
+  await page.getByRole("button", { name: "Save changes" }).nth(1).click();
+  await expect(page.getByText("Configured · Enabled").nth(1)).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByLabel("Kitchen Printer address")).toHaveValue(
+    "kitchen.local",
+  );
+  await expect(page.getByLabel("Receipt Printer address")).toHaveValue(
+    "receipt.local",
+  );
 });

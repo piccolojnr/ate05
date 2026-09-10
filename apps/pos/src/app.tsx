@@ -14,12 +14,10 @@ import type {
   PosPrinterConfig,
 } from "./lib/pos-client";
 import { formatGhs } from "./lib/pos-client";
-import {
-  InventoryScreen,
-  SettingsScreen,
-  TablesScreen,
-} from "./screens/placeholders";
+import { TablesScreen } from "./screens/tables/tables-screen";
 import { MenuScreen } from "./screens/menu/menu-screen";
+import { InventoryScreen } from "./screens/inventory/inventory-screen";
+import { SettingsScreen } from "./screens/settings/settings-screen";
 import type { MenuManagementData } from "./lib/pos-client";
 import { OrdersScreen } from "./screens/orders/orders-screen";
 
@@ -364,8 +362,9 @@ export function App() {
         {activeScreen === "Settings" && (
           <SettingsScreen
             key={
-              printers.find((printer) => printer.role === "kitchen")?.id ??
-              "no-kitchen-printer"
+              printers
+                .map((printer) => `${printer.role}:${printer.id}`)
+                .join("|") || "no-printers"
             }
             printers={printers}
             onSavePrinter={savePrinter}
