@@ -60,6 +60,40 @@ test("renders local seating data", async ({ page }) => {
   await expect(page.getByText("T1")).toBeVisible();
 });
 
+test("operator can manage persisted menu items and use them in POS", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.removeItem("ate05-pos-browser-preview-v1"),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "Menu", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Menu" })).toBeVisible();
+  await page.getByRole("button", { name: "New Menu Item" }).click();
+  await page.getByLabel("Item name").fill("Garden Salad");
+  await page.getByLabel("Price (GHS)").fill("28.50");
+  await page.getByRole("button", { name: "Create item" }).click();
+  await expect(page.getByText("Garden Salad").first()).toBeVisible();
+  await page.getByRole("button", { name: "POS", exact: true }).click();
+  await page.getByRole("button", { name: "Takeaway" }).click();
+  await page.getByLabel("Search menu").fill("Garden Salad");
+  await expect(
+    page.getByRole("button", { name: "Add Garden Salad" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Add Garden Salad" }).click();
+  await expect(page.getByLabel("Current order")).toContainText("GHS 28.50");
+  await page.getByRole("button", { name: "Menu", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Garden Salad" }).click();
+  await page.getByLabel("Price (GHS)").fill("30.00");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await page.getByRole("button", { name: "POS", exact: true }).click();
+  await page.getByLabel("Search menu").fill("Garden Salad");
+  await expect(
+    page.getByRole("button", { name: "Add Garden Salad" }),
+  ).toContainText("30.00");
+});
+
 test("cashier can receive, issue, and inspect inventory movements", async ({
   page,
 }) => {

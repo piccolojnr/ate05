@@ -20,6 +20,8 @@ import type {
   PosPayment,
   PosReceipt,
   PosPrinterConfig,
+  MenuManagementData,
+  MenuManagementItem,
 } from "./pos-client";
 import type { PaperWidth } from "@ate05/printing";
 
@@ -123,6 +125,44 @@ function mapStockMovement(row: Row): StockMovement {
     reason: asNullableString(row.reason),
     createdBy: asNullableString(row.createdBy),
     createdAt: asString(row.createdAt),
+  };
+}
+function mapMenuManagement(row: Row): MenuManagementItem {
+  return {
+    id: asString(row.id),
+    categoryId: asString(row.categoryId),
+    categoryName: asString(row.categoryName),
+    name: asString(row.name),
+    description: asNullableString(row.description),
+    sellingPriceMinor: asNumber(row.sellingPriceMinor),
+    available: Boolean(asNumber(row.available)),
+    active: Boolean(asNumber(row.active)),
+    updatedAt: asString(row.updatedAt),
+  };
+}
+async function listMenuManagementRows(
+  db: SqlDatabase,
+): Promise<MenuManagementData> {
+  const [categories, items] = await Promise.all([
+    select<Row>(
+      db,
+      "SELECT id, name, sort_order AS sortOrder, active FROM menu_categories WHERE business_id = $1 ORDER BY active DESC, sort_order, name",
+      [businessId],
+    ),
+    select<Row>(
+      db,
+      "SELECT i.id, i.category_id AS categoryId, c.name AS categoryName, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.available, i.active, i.updated_at AS updatedAt FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = $1 ORDER BY i.active DESC, i.name",
+      [businessId],
+    ),
+  ]);
+  return {
+    categories: categories.map((row) => ({
+      id: asString(row.id),
+      name: asString(row.name),
+      sortOrder: asNumber(row.sortOrder),
+      active: Boolean(asNumber(row.active)),
+    })),
+    items: items.map(mapMenuManagement),
   };
 }
 async function database(): Promise<SqlDatabase> {
@@ -755,6 +795,169 @@ export function createTauriClient(): PosClient {
         })),
         openOrders: openOrders.map((row) => mapOrder(row, [])),
         inventory,
+      };
+    },
+    async listMenuManagement() {
+      return listMenuManagementRows(await database());
+    },
+    async createMenuItem(input) {
+      if (!input.name.trim())
+        throw new PosClientError("validation", "Menu item name is required.");
+      if (
+        !Number.isSafeInteger(input.sellingPriceMinor) ||
+        input.sellingPriceMinor < 0
+      )
+        throw new PosClientError(
+          "validation",
+          "Price must be a valid non-negative amount.",
+        );
+      const db = await database();
+      const id = crypto.randomUUID();
+      const now = timestamp();
+      await execute(db, "BEGIN IMMEDIATE");
+      try {
+        const [category] = await select<Row>(
+          db,
+          "SELECT id FROM menu_categories WHERE id = $1 AND business_id = $2 AND active = 1",
+          [input.categoryId, businessId],
+        );
+        if (!category)
+          throw new PosClientError(
+            "validation",
+            "The selected category is unavailable.",
+          );
+        await execute(
+          db,
+          "INSERT INTO menu_items (id, business_id, category_id, name, description, selling_price_minor, available, active, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)",
+          [
+            id,
+            businessId,
+            input.categoryId,
+            input.name.trim(),
+            input.description?.trim() || null,
+            input.sellingPriceMinor,
+            input.available ? 1 : 0,
+            input.active ? 1 : 0,
+            now,
+          ],
+        );
+        await execute(db, "COMMIT");
+      } catch (cause) {
+        await execute(db, "ROLLBACK").catch(() => undefined);
+        throw cause;
+      }
+      const data = await listMenuManagementRows(db);
+      const item = data.items.find((entry) => entry.id === id);
+      if (!item)
+        throw new PosClientError("database", "Menu item could not be saved.");
+      return item;
+    },
+    async updateMenuItem(input) {
+      if (!input.name.trim())
+        throw new PosClientError("validation", "Menu item name is required.");
+      if (
+        !Number.isSafeInteger(input.sellingPriceMinor) ||
+        input.sellingPriceMinor < 0
+      )
+        throw new PosClientError(
+          "validation",
+          "Price must be a valid non-negative amount.",
+        );
+      const db = await database();
+      await execute(db, "BEGIN IMMEDIATE");
+      try {
+        const [category] = await select<Row>(
+          db,
+          "SELECT id FROM menu_categories WHERE id = $1 AND business_id = $2 AND active = 1",
+          [input.categoryId, businessId],
+        );
+        if (!category)
+          throw new PosClientError(
+            "validation",
+            "The selected category is unavailable.",
+          );
+        await execute(
+          db,
+          "UPDATE menu_items SET name = $1, description = $2, category_id = $3, selling_price_minor = $4, available = $5, active = $6, updated_at = $7 WHERE id = $8 AND business_id = $9",
+          [
+            input.name.trim(),
+            input.description?.trim() || null,
+            input.categoryId,
+            input.sellingPriceMinor,
+            input.available ? 1 : 0,
+            input.active ? 1 : 0,
+            timestamp(),
+            input.id,
+            businessId,
+          ],
+        );
+        await execute(db, "COMMIT");
+      } catch (cause) {
+        await execute(db, "ROLLBACK").catch(() => undefined);
+        throw cause;
+      }
+      const item = (await listMenuManagementRows(db)).items.find(
+        (entry) => entry.id === input.id,
+      );
+      if (!item) throw new PosClientError("not_found", "Menu item not found.");
+      return item;
+    },
+    async createMenuCategory(name) {
+      if (!name.trim())
+        throw new PosClientError("validation", "Category name is required.");
+      const db = await database();
+      const id = crypto.randomUUID();
+      const now = timestamp();
+      const [next] = await select<Row>(
+        db,
+        "SELECT COALESCE(MAX(sort_order), 0) + 1 AS sortOrder FROM menu_categories WHERE business_id = $1",
+        [businessId],
+      );
+      await execute(
+        db,
+        "INSERT INTO menu_categories (id, business_id, name, sort_order, active, created_at, updated_at) VALUES ($1, $2, $3, $4, 1, $5, $5)",
+        [id, businessId, name.trim(), asNumber(next?.sortOrder), now],
+      );
+      return { id, name: name.trim(), sortOrder: asNumber(next?.sortOrder) };
+    },
+    async updateMenuCategory(input) {
+      if (!input.name.trim())
+        throw new PosClientError("validation", "Category name is required.");
+      const db = await database();
+      if (!input.active) {
+        const [activeItem] = await select<Row>(
+          db,
+          "SELECT 1 FROM menu_items WHERE category_id = $1 AND business_id = $2 AND active = 1 LIMIT 1",
+          [input.id, businessId],
+        );
+        if (activeItem)
+          throw new PosClientError(
+            "invalid_state",
+            "Deactivate or reassign active items before disabling this category.",
+          );
+      }
+      await execute(
+        db,
+        "UPDATE menu_categories SET name = $1, active = $2, updated_at = $3 WHERE id = $4 AND business_id = $5",
+        [
+          input.name.trim(),
+          input.active ? 1 : 0,
+          timestamp(),
+          input.id,
+          businessId,
+        ],
+      );
+      const [category] = await select<Row>(
+        db,
+        "SELECT id, name, sort_order AS sortOrder FROM menu_categories WHERE id = $1 AND business_id = $2",
+        [input.id, businessId],
+      );
+      if (!category)
+        throw new PosClientError("not_found", "Category not found.");
+      return {
+        id: asString(category.id),
+        name: asString(category.name),
+        sortOrder: asNumber(category.sortOrder),
       };
     },
     async addMenuItem(input) {

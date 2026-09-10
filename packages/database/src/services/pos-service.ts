@@ -45,6 +45,21 @@ export interface PosMenuItem {
   name: string;
   description: string | null;
   sellingPriceMinor: number;
+  available?: boolean;
+  active?: boolean;
+  updatedAt?: string;
+}
+
+export interface MenuManagementItem extends PosMenuItem {
+  categoryName: string;
+  available: boolean;
+  active: boolean;
+  updatedAt: string;
+}
+
+export interface MenuManagementData {
+  categories: Array<PosMenuCategory & { active: boolean }>;
+  items: MenuManagementItem[];
 }
 
 export interface PosTable {
@@ -192,12 +207,218 @@ export function createPosService(sqlite: Database.Database) {
       .all(businessId) as PosMenuCategory[];
     const items = sqlite
       .prepare(
-        "SELECT i.id, i.category_id AS categoryId, i.name, i.description, i.selling_price_minor AS sellingPriceMinor FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = ? AND i.active = 1 AND i.available = 1 AND c.active = 1 ORDER BY i.name",
+        "SELECT i.id, i.category_id AS categoryId, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.available, i.active, i.updated_at AS updatedAt FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = ? AND i.active = 1 AND i.available = 1 AND c.active = 1 ORDER BY i.name",
       )
-      .all(businessId) as PosMenuItem[];
-    return { categories, items };
+      .all(businessId) as Array<{
+      id: string;
+      categoryId: string;
+      name: string;
+      description: string | null;
+      sellingPriceMinor: number;
+      available: number;
+      active: number;
+      updatedAt: string;
+    }>;
+    return {
+      categories,
+      items: items.map((item) => ({
+        ...item,
+        available: Boolean(item.available),
+        active: Boolean(item.active),
+      })),
+    };
   }
 
+  function listMenuManagement(businessId: string): MenuManagementData {
+    const categories = sqlite
+      .prepare(
+        "SELECT id, name, sort_order AS sortOrder, active FROM menu_categories WHERE business_id = ? ORDER BY active DESC, sort_order, name",
+      )
+      .all(businessId) as Array<PosMenuCategory & { active: number }>;
+    const items = sqlite
+      .prepare(
+        "SELECT i.id, i.category_id AS categoryId, c.name AS categoryName, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.available, i.active, i.updated_at AS updatedAt FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = ? ORDER BY i.active DESC, i.name",
+      )
+      .all(businessId) as Array<{
+      id: string;
+      categoryId: string;
+      categoryName: string;
+      name: string;
+      description: string | null;
+      sellingPriceMinor: number;
+      available: number;
+      active: number;
+      updatedAt: string;
+    }>;
+    return {
+      categories: categories.map((category) => ({
+        ...category,
+        active: Boolean(category.active),
+      })),
+      items: items.map((item) => ({
+        ...item,
+        available: Boolean(item.available),
+        active: Boolean(item.active),
+      })),
+    };
+  }
+
+  function createMenuItem(input: {
+    businessId: string;
+    name: string;
+    description?: string | null;
+    categoryId: string;
+    sellingPriceMinor: number;
+    available: boolean;
+    active: boolean;
+  }): MenuManagementItem {
+    if (!input.name.trim()) throw new Error("Menu item name is required.");
+    if (
+      !Number.isSafeInteger(input.sellingPriceMinor) ||
+      input.sellingPriceMinor < 0
+    )
+      throw new Error("Price must be a valid non-negative amount.");
+    const id = randomUUID();
+    const createdAt = now();
+    sqlite.transaction(() => {
+      const category = sqlite
+        .prepare(
+          "SELECT id FROM menu_categories WHERE id = ? AND business_id = ? AND active = 1",
+        )
+        .get(input.categoryId, input.businessId);
+      if (!category) throw new Error("The selected category is unavailable.");
+      sqlite
+        .prepare(
+          "INSERT INTO menu_items (id, business_id, category_id, name, description, selling_price_minor, available, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          id,
+          input.businessId,
+          input.categoryId,
+          input.name.trim(),
+          input.description?.trim() || null,
+          input.sellingPriceMinor,
+          input.available ? 1 : 0,
+          input.active ? 1 : 0,
+          createdAt,
+          createdAt,
+        );
+    })();
+    return listMenuManagement(input.businessId).items.find(
+      (item) => item.id === id,
+    )!;
+  }
+
+  function updateMenuItem(input: {
+    businessId: string;
+    id: string;
+    name: string;
+    description?: string | null;
+    categoryId: string;
+    sellingPriceMinor: number;
+    available: boolean;
+    active: boolean;
+  }): MenuManagementItem {
+    if (!input.name.trim()) throw new Error("Menu item name is required.");
+    if (
+      !Number.isSafeInteger(input.sellingPriceMinor) ||
+      input.sellingPriceMinor < 0
+    )
+      throw new Error("Price must be a valid non-negative amount.");
+    const updatedAt = now();
+    sqlite.transaction(() => {
+      const category = sqlite
+        .prepare(
+          "SELECT id FROM menu_categories WHERE id = ? AND business_id = ? AND active = 1",
+        )
+        .get(input.categoryId, input.businessId);
+      if (!category) throw new Error("The selected category is unavailable.");
+      const result = sqlite
+        .prepare(
+          "UPDATE menu_items SET name = ?, description = ?, category_id = ?, selling_price_minor = ?, available = ?, active = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        )
+        .run(
+          input.name.trim(),
+          input.description?.trim() || null,
+          input.categoryId,
+          input.sellingPriceMinor,
+          input.available ? 1 : 0,
+          input.active ? 1 : 0,
+          updatedAt,
+          input.id,
+          input.businessId,
+        );
+      if (result.changes !== 1) throw new Error("Menu item not found.");
+    })();
+    return listMenuManagement(input.businessId).items.find(
+      (item) => item.id === input.id,
+    )!;
+  }
+
+  function createMenuCategory(input: {
+    businessId: string;
+    name: string;
+  }): PosMenuCategory {
+    if (!input.name.trim()) throw new Error("Category name is required.");
+    const id = randomUUID();
+    const createdAt = now();
+    const next = sqlite
+      .prepare(
+        "SELECT COALESCE(MAX(sort_order), 0) + 1 AS sortOrder FROM menu_categories WHERE business_id = ?",
+      )
+      .get(input.businessId) as { sortOrder: number };
+    sqlite
+      .prepare(
+        "INSERT INTO menu_categories (id, business_id, name, sort_order, active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+      )
+      .run(
+        id,
+        input.businessId,
+        input.name.trim(),
+        next.sortOrder,
+        createdAt,
+        createdAt,
+      );
+    return { id, name: input.name.trim(), sortOrder: next.sortOrder };
+  }
+
+  function updateMenuCategory(input: {
+    businessId: string;
+    id: string;
+    name: string;
+    active: boolean;
+  }): PosMenuCategory {
+    if (!input.name.trim()) throw new Error("Category name is required.");
+    if (!input.active) {
+      const activeItem = sqlite
+        .prepare(
+          "SELECT 1 FROM menu_items WHERE category_id = ? AND business_id = ? AND active = 1 LIMIT 1",
+        )
+        .get(input.id, input.businessId);
+      if (activeItem)
+        throw new Error(
+          "Deactivate or reassign active items before disabling this category.",
+        );
+    }
+    const result = sqlite
+      .prepare(
+        "UPDATE menu_categories SET name = ?, active = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+      )
+      .run(
+        input.name.trim(),
+        input.active ? 1 : 0,
+        now(),
+        input.id,
+        input.businessId,
+      );
+    if (result.changes !== 1) throw new Error("Category not found.");
+    const category = sqlite
+      .prepare(
+        "SELECT id, name, sort_order AS sortOrder FROM menu_categories WHERE id = ? AND business_id = ?",
+      )
+      .get(input.id, input.businessId) as PosMenuCategory;
+    return category;
+  }
   function listAvailableTables(businessId: string): PosTable[] {
     return sqlite
       .prepare(
@@ -779,6 +1000,11 @@ export function createPosService(sqlite: Database.Database) {
     addMenuItem,
     createOrder,
     getMenu,
+    listMenuManagement,
+    createMenuItem,
+    updateMenuItem,
+    createMenuCategory,
+    updateMenuCategory,
     getOrder,
     listAvailableTables,
     listOpenOrders,

@@ -15,6 +15,18 @@ export interface MenuItem {
   sellingPriceMinor: number;
 }
 
+export interface MenuManagementItem extends MenuItem {
+  categoryName: string;
+  available: boolean;
+  active: boolean;
+  updatedAt: string;
+}
+
+export interface MenuManagementData {
+  categories: Array<MenuCategory & { active: boolean }>;
+  items: MenuManagementItem[];
+}
+
 export type InventoryUnit =
   "kg" | "g" | "litre" | "ml" | "bottle" | "piece" | "pack";
 export type StockMovementType =
@@ -138,6 +150,30 @@ export interface PosBootstrap {
 
 export interface PosClient {
   bootstrap(): Promise<PosBootstrap>;
+  listMenuManagement(): Promise<MenuManagementData>;
+  createMenuItem(input: {
+    name: string;
+    description?: string | null;
+    categoryId: string;
+    sellingPriceMinor: number;
+    available: boolean;
+    active: boolean;
+  }): Promise<MenuManagementItem>;
+  updateMenuItem(input: {
+    id: string;
+    name: string;
+    description?: string | null;
+    categoryId: string;
+    sellingPriceMinor: number;
+    available: boolean;
+    active: boolean;
+  }): Promise<MenuManagementItem>;
+  createMenuCategory(name: string): Promise<MenuCategory>;
+  updateMenuCategory(input: {
+    id: string;
+    name: string;
+    active: boolean;
+  }): Promise<MenuCategory>;
   addMenuItem(input: {
     orderId?: string;
     menuItemId: string;

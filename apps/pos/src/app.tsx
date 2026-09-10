@@ -16,10 +16,11 @@ import type {
 import { formatGhs } from "./lib/pos-client";
 import {
   InventoryScreen,
-  MenuScreen,
   SettingsScreen,
   TablesScreen,
 } from "./screens/placeholders";
+import { MenuScreen } from "./screens/menu/menu-screen";
+import type { MenuManagementData } from "./lib/pos-client";
 import { OrdersScreen } from "./screens/orders/orders-screen";
 
 const client = getPosClient();
@@ -28,6 +29,8 @@ export function App() {
   const [activeScreen, setActiveScreen] = useState<NavigationItem>("POS");
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(null);
   const [printers, setPrinters] = useState<PosPrinterConfig[]>([]);
+  const [menuManagement, setMenuManagement] =
+    useState<MenuManagementData | null>(null);
   const [order, setOrder] = useState<PosOrder | null>(null);
   const [category, setCategory] = useState("All");
   const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
@@ -42,12 +45,14 @@ export function App() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextBootstrap, nextPrinters] = await Promise.all([
+      const [nextBootstrap, nextPrinters, nextMenu] = await Promise.all([
         client.bootstrap(),
         client.listPrinters(),
+        client.listMenuManagement(),
       ]);
       setBootstrap(nextBootstrap);
       setPrinters(nextPrinters);
+      setMenuManagement(nextMenu);
     } catch (cause) {
       notify.error(
         cause instanceof Error
@@ -58,6 +63,40 @@ export function App() {
       setLoading(false);
     }
   }, []);
+  async function refreshMenu() {
+    setMenuManagement(await client.listMenuManagement());
+    const nextBootstrap = await client.bootstrap();
+    setBootstrap(nextBootstrap);
+  }
+  async function saveMenuItem(
+    input: Parameters<PosClient["createMenuItem"]>[0] & { id?: string },
+  ) {
+    try {
+      if (input.id)
+        await client.updateMenuItem(
+          input as Parameters<PosClient["updateMenuItem"]>[0],
+        );
+      else await client.createMenuItem(input);
+      await refreshMenu();
+      notify.success(input.id ? "Menu item updated." : "Menu item created.");
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to save menu item.",
+      );
+      throw cause;
+    }
+  }
+  async function createMenuCategory(name: string) {
+    try {
+      await client.createMenuCategory(name);
+      await refreshMenu();
+      notify.success("Category created.");
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to create category.",
+      );
+    }
+  }
   useEffect(() => {
     const timer = window.setTimeout(() => void refresh(), 0);
     return () => window.clearTimeout(timer);
@@ -277,7 +316,14 @@ export function App() {
         {activeScreen === "Tables" && (
           <TablesScreen tables={bootstrap?.tables ?? []} />
         )}
-        {activeScreen === "Menu" && <MenuScreen />}
+        {activeScreen === "Menu" && menuManagement ? (
+          <MenuScreen
+            data={menuManagement}
+            onCreate={(input) => saveMenuItem(input)}
+            onUpdate={(input) => saveMenuItem(input)}
+            onCreateCategory={createMenuCategory}
+          />
+        ) : null}
         {activeScreen === "Inventory" && (
           <InventoryScreen
             items={bootstrap?.inventory ?? []}

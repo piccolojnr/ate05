@@ -117,6 +117,98 @@ describe("POS application service", () => {
     ]);
   });
 
+  it("creates and updates menu items without changing historical order snapshots", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    const menu = service.listMenuManagement(business);
+    const riceCategory = menu.categories.find(
+      (category) => category.name === "Rice",
+    )!;
+    const created = service.createMenuItem({
+      businessId: business,
+      name: "Lunch Rice",
+      description: "Daily special",
+      categoryId: riceCategory.id,
+      sellingPriceMinor: 4250,
+      available: true,
+      active: true,
+    });
+    expect(created).toMatchObject({
+      name: "Lunch Rice",
+      sellingPriceMinor: 4250,
+      available: true,
+    });
+    const updated = service.updateMenuItem({
+      businessId: business,
+      id: friedRice,
+      name: "Fried Rice",
+      categoryId: riceCategory.id,
+      sellingPriceMinor: 5500,
+      available: false,
+      active: true,
+    });
+    expect(updated).toMatchObject({
+      sellingPriceMinor: 5500,
+      available: false,
+    });
+    expect(service.getOrder(order.id, business).items[0]).toMatchObject({
+      name: "Fried Rice",
+      unitPriceMinor: 5000,
+    });
+    expect(
+      service.getMenu(business).items.map((item) => item.id),
+    ).not.toContain(friedRice);
+    const recreated = createPosService(database.sqlite);
+    expect(
+      recreated
+        .listMenuManagement(business)
+        .items.find((item) => item.id === created.id),
+    ).toMatchObject({ name: "Lunch Rice" });
+  });
+
+  it("enforces menu business scoping and validates prices", () => {
+    const category = service.listMenuManagement(business).categories[0]!;
+    expect(() =>
+      service.createMenuItem({
+        businessId: "00000000-0000-4000-8000-000000000901",
+        name: "Private Item",
+        categoryId: category.id,
+        sellingPriceMinor: 100,
+        available: true,
+        active: true,
+      }),
+    ).toThrow("category");
+    expect(() =>
+      service.updateMenuItem({
+        businessId: business,
+        id: friedRice,
+        name: "Fried Rice",
+        categoryId: category.id,
+        sellingPriceMinor: -1,
+        available: true,
+        active: true,
+      }),
+    ).toThrow("Price");
+  });
+
+  it("does not deactivate a category that still owns active items", () => {
+    const category = service
+      .listMenuManagement(business)
+      .categories.find((entry) => entry.name === "Rice")!;
+    expect(() =>
+      service.updateMenuCategory({
+        businessId: business,
+        id: category.id,
+        name: category.name,
+        active: false,
+      }),
+    ).toThrow("active items");
+  });
+
   it("updates quantities, notes, and integer totals before removing an empty line", () => {
     let order = service.addMenuItem({
       businessId: business,

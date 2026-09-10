@@ -3,6 +3,8 @@ import type {
   InventoryItem,
   MenuCategory,
   MenuItem,
+  MenuManagementData,
+  MenuManagementItem,
   PosBootstrap,
   PosClient,
   PosOrder,
@@ -25,6 +27,10 @@ interface PreviewState {
   printers: PosPrinterConfig[];
   inventory: InventoryItem[];
   movements: StockMovement[];
+  menuCategories?: Array<MenuCategory & { active: boolean; updatedAt: string }>;
+  menuItems?: Array<
+    MenuItem & { available: boolean; active: boolean; updatedAt: string }
+  >;
 }
 
 const categories: MenuCategory[] = [
@@ -85,6 +91,17 @@ function readState(): PreviewState {
   state.printers ??= [];
   state.inventory ??= [];
   state.movements ??= [];
+  state.menuCategories ??= categories.map((category) => ({
+    ...category,
+    active: true,
+    updatedAt: new Date().toISOString(),
+  }));
+  state.menuItems ??= items.map((item) => ({
+    ...item,
+    available: true,
+    active: true,
+    updatedAt: new Date().toISOString(),
+  }));
   for (const order of state.orders) {
     order.amountPaidMinor ??=
       order.receipt?.payments.reduce(
@@ -236,6 +253,8 @@ export function createBrowserPreviewClient(): PosClient {
   return {
     async bootstrap(): Promise<PosBootstrap> {
       const state = readState();
+      const menuCategories = state.menuCategories!;
+      const menuItems = state.menuItems!;
       const occupied = new Set(
         state.orders
           .filter(
@@ -246,8 +265,15 @@ export function createBrowserPreviewClient(): PosClient {
       return {
         businessId,
         createdBy,
-        categories,
-        items,
+        categories: menuCategories.filter((category) => category.active),
+        items: menuItems.filter(
+          (item) =>
+            item.active &&
+            item.available &&
+            menuCategories.some(
+              (category) => category.id === item.categoryId && category.active,
+            ),
+        ),
         tables: tables.map((table) => ({
           ...table,
           status: occupied.has(table.id) ? "occupied" : table.status,
@@ -277,9 +303,120 @@ export function createBrowserPreviewClient(): PosClient {
         inventory: state.inventory.map(refreshInventory),
       };
     },
+    async listMenuManagement(): Promise<MenuManagementData> {
+      const state = readState();
+      return {
+        categories: state.menuCategories!.map(
+          ({ id, name, sortOrder, active }) => ({
+            id,
+            name,
+            sortOrder,
+            active,
+          }),
+        ),
+        items: state.menuItems!.map((item) => ({
+          ...item,
+          categoryName:
+            state.menuCategories!.find(
+              (category) => category.id === item.categoryId,
+            )?.name ?? "Unknown",
+        })),
+      };
+    },
+    async createMenuItem(input) {
+      if (!input.name.trim()) throw new Error("Menu item name is required.");
+      if (
+        !Number.isSafeInteger(input.sellingPriceMinor) ||
+        input.sellingPriceMinor < 0
+      )
+        throw new Error("Price must be a valid non-negative amount.");
+      const state = readState();
+      const category = state.menuCategories!.find(
+        (entry) => entry.id === input.categoryId && entry.active,
+      );
+      if (!category) throw new Error("The selected category is unavailable.");
+      const item = {
+        id: crypto.randomUUID(),
+        categoryId: input.categoryId,
+        name: input.name.trim(),
+        description: input.description?.trim() || null,
+        sellingPriceMinor: input.sellingPriceMinor,
+        available: input.available,
+        active: input.active,
+        updatedAt: new Date().toISOString(),
+      };
+      state.menuItems!.push(item);
+      writeState(state);
+      return { ...item, categoryName: category.name } as MenuManagementItem;
+    },
+    async updateMenuItem(input) {
+      if (!input.name.trim()) throw new Error("Menu item name is required.");
+      if (
+        !Number.isSafeInteger(input.sellingPriceMinor) ||
+        input.sellingPriceMinor < 0
+      )
+        throw new Error("Price must be a valid non-negative amount.");
+      const state = readState();
+      const item = state.menuItems!.find((entry) => entry.id === input.id);
+      const category = state.menuCategories!.find(
+        (entry) => entry.id === input.categoryId && entry.active,
+      );
+      if (!item) throw new Error("Menu item not found.");
+      if (!category) throw new Error("The selected category is unavailable.");
+      Object.assign(item, {
+        name: input.name.trim(),
+        description: input.description?.trim() || null,
+        categoryId: input.categoryId,
+        sellingPriceMinor: input.sellingPriceMinor,
+        available: input.available,
+        active: input.active,
+        updatedAt: new Date().toISOString(),
+      });
+      writeState(state);
+      return { ...item, categoryName: category.name } as MenuManagementItem;
+    },
+    async createMenuCategory(name) {
+      if (!name.trim()) throw new Error("Category name is required.");
+      const state = readState();
+      const category = {
+        id: crypto.randomUUID(),
+        name: name.trim(),
+        sortOrder: state.menuCategories!.length + 1,
+        active: true,
+        updatedAt: new Date().toISOString(),
+      };
+      state.menuCategories!.push(category);
+      writeState(state);
+      return category;
+    },
+    async updateMenuCategory(input) {
+      const state = readState();
+      const category = state.menuCategories!.find(
+        (entry) => entry.id === input.id,
+      );
+      if (!category) throw new Error("Category not found.");
+      if (
+        !input.active &&
+        state.menuItems!.some(
+          (item) => item.categoryId === input.id && item.active,
+        )
+      )
+        throw new Error(
+          "Deactivate or reassign active items before disabling this category.",
+        );
+      Object.assign(category, {
+        name: input.name.trim(),
+        active: input.active,
+        updatedAt: new Date().toISOString(),
+      });
+      writeState(state);
+      return category;
+    },
     async addMenuItem(input) {
       const state = readState();
-      const menuItem = items.find((item) => item.id === input.menuItemId);
+      const menuItem = state.menuItems!.find(
+        (item) => item.id === input.menuItemId && item.active && item.available,
+      );
       if (!menuItem) throw new Error("This menu item is unavailable.");
       let order = input.orderId
         ? state.orders.find((entry) => entry.id === input.orderId)

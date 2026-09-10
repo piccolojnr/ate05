@@ -84,67 +84,6 @@ export function TablesScreen({ tables }: { tables: RestaurantTable[] }) {
   );
 }
 
-export function MenuScreen() {
-  return (
-    <div className="space-y-6">
-      <ScreenHeader
-        title="Menu"
-        description="Menu categories and currently available items."
-        action="Add item"
-      />
-      <div className="grid gap-5 lg:grid-cols-[220px_1fr]">
-        <Card className="p-3">
-          <p className="px-2 py-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-            Categories
-          </p>
-          {["Popular", "Grills", "Rice", "Drinks", "Sides", "Dessert"].map(
-            (name, index) => (
-              <button
-                className={`flex w-full items-center justify-between rounded-md px-3 py-3 text-left text-sm font-semibold ${index === 0 ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
-                type="button"
-                key={name}
-              >
-                {name}
-                <span className="text-xs text-muted-foreground">
-                  {index + 2}
-                </span>
-              </button>
-            ),
-          )}
-        </Card>
-        <Card className="overflow-hidden">
-          <div className="grid grid-cols-[1.5fr_1fr_100px] gap-4 border-b bg-muted/50 px-5 py-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-            <span>Item</span>
-            <span>Category</span>
-            <span className="text-right">Price</span>
-          </div>
-          {["Jollof Rice", "Waakye Bowl", "Grilled Chicken", "Coke"].map(
-            (item, index) => (
-              <div
-                className="grid grid-cols-[1.5fr_1fr_100px] gap-4 border-b px-5 py-4 last:border-0"
-                key={item}
-              >
-                <span className="font-bold">
-                  {item}
-                  <Badge className="ml-2" tone="success">
-                    Available
-                  </Badge>
-                </span>
-                <span className="text-sm text-muted-foreground">
-                  {index < 2 ? "Rice" : index === 2 ? "Grills" : "Drinks"}
-                </span>
-                <span className="text-right font-bold">
-                  GHS {[42, 38, 55, 12][index]}
-                </span>
-              </div>
-            ),
-          )}
-        </Card>
-      </div>
-    </div>
-  );
-}
-
 export function InventoryScreen({
   items,
   onCreate,
