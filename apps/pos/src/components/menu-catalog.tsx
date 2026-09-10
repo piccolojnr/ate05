@@ -183,22 +183,24 @@ export function MenuCatalog({
               <span className="mr-1 shrink-0 text-xs font-semibold text-muted-foreground">
                 Table
               </span>
-              {tables.map((table) => (
-                <Button
-                  className={cn(
-                    "min-w-12 shrink-0",
-                    tableId === table.id &&
-                      "!border-primary !bg-primary !text-white",
-                  )}
-                  key={table.id}
-                  size="sm"
-                  variant="secondary"
-                  disabled={table.status === "occupied"}
-                  onClick={() => onTableChange(table.id)}
-                >
-                  {table.name.replace("Table ", "T")}
-                </Button>
-              ))}
+              {tables
+                .filter((table) => table.active)
+                .map((table) => (
+                  <Button
+                    className={cn(
+                      "min-w-12 shrink-0",
+                      tableId === table.id &&
+                        "!border-primary !bg-primary !text-white",
+                    )}
+                    key={table.id}
+                    size="sm"
+                    variant="secondary"
+                    disabled={table.status === "occupied"}
+                    onClick={() => onTableChange(table.id)}
+                  >
+                    {table.name.replace("Table ", "T")}
+                  </Button>
+                ))}
             </div>
           ) : (
             <span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">

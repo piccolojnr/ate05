@@ -66,6 +66,7 @@ export interface PosTable {
   id: string;
   name: string;
   capacity: number;
+  active: boolean;
   status: "available" | "occupied" | "reserved";
 }
 
@@ -121,6 +122,21 @@ export interface SendOrderToKitchenInput {
   businessId: string;
   orderId: string;
   userId: string;
+}
+
+export interface CreateTableInput {
+  businessId: string;
+  name: string;
+  capacity?: number;
+  active?: boolean;
+}
+
+export interface UpdateTableInput {
+  businessId: string;
+  id: string;
+  name: string;
+  capacity?: number;
+  active: boolean;
 }
 
 export type InventoryUnit =
@@ -420,9 +436,9 @@ export function createPosService(sqlite: Database.Database) {
     return category;
   }
   function listAvailableTables(businessId: string): PosTable[] {
-    return sqlite
+    const rows = sqlite
       .prepare(
-        `SELECT t.id, t.name, t.capacity,
+        `SELECT t.id, t.name, t.capacity, t.active,
         CASE WHEN EXISTS (
           SELECT 1 FROM orders o
           WHERE o.table_id = t.id AND o.business_id = t.business_id
@@ -430,10 +446,142 @@ export function createPosService(sqlite: Database.Database) {
             AND o.status IN ('open', 'sent_to_kitchen', 'preparing', 'ready')
         ) THEN 'occupied' ELSE t.status END AS status
         FROM restaurant_tables t
-        WHERE t.business_id = ? AND t.active = 1
+        WHERE t.business_id = ?
         ORDER BY t.name`,
       )
-      .all(businessId) as PosTable[];
+      .all(businessId) as Array<{
+      id: string;
+      name: string;
+      capacity: number;
+      active: number;
+      status: PosTable["status"];
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      capacity: row.capacity,
+      active: Boolean(row.active),
+      status: row.status,
+    }));
+  }
+
+  function createTable(input: CreateTableInput): PosTable {
+    const name = input.name.trim();
+    if (!name) throw new Error("Table name is required.");
+    const capacity = input.capacity ?? 4;
+    if (!Number.isSafeInteger(capacity) || capacity <= 0)
+      throw new Error("Table capacity must be a positive whole number.");
+    const id = randomUUID();
+    const duplicate = sqlite
+      .prepare(
+        "SELECT id FROM restaurant_tables WHERE business_id = ? AND lower(name) = lower(?)",
+      )
+      .get(input.businessId, name);
+    if (duplicate) throw new Error("A table with this name already exists.");
+    try {
+      sqlite
+        .prepare(
+          "INSERT INTO restaurant_tables (id, business_id, name, capacity, status, active, created_at, updated_at) VALUES (?, ?, ?, ?, 'available', ?, ?, ?)",
+        )
+        .run(
+          id,
+          input.businessId,
+          name,
+          capacity,
+          input.active === false ? 0 : 1,
+          now(),
+          now(),
+        );
+    } catch (cause) {
+      if (String(cause).includes("restaurant_tables_business_name_unique"))
+        throw new Error("A table with this name already exists.");
+      throw cause;
+    }
+    return listAvailableTables(input.businessId).find(
+      (table) => table.id === id,
+    )!;
+  }
+
+  function updateTable(input: UpdateTableInput): PosTable {
+    const name = input.name.trim();
+    if (!name) throw new Error("Table name is required.");
+    const capacity = input.capacity ?? 4;
+    if (!Number.isSafeInteger(capacity) || capacity <= 0)
+      throw new Error("Table capacity must be a positive whole number.");
+    const duplicate = sqlite
+      .prepare(
+        "SELECT id FROM restaurant_tables WHERE business_id = ? AND lower(name) = lower(?) AND id <> ?",
+      )
+      .get(input.businessId, name, input.id);
+    if (duplicate) throw new Error("A table with this name already exists.");
+    try {
+      sqlite.transaction(() => {
+        const table = sqlite
+          .prepare(
+            "SELECT id FROM restaurant_tables WHERE id = ? AND business_id = ?",
+          )
+          .get(input.id, input.businessId);
+        if (!table) throw new Error("Table not found.");
+        const activeOrder = sqlite
+          .prepare(
+            "SELECT 1 FROM orders WHERE table_id = ? AND business_id = ? AND order_type = 'dine_in' AND status IN ('open', 'sent_to_kitchen', 'preparing', 'ready') LIMIT 1",
+          )
+          .get(input.id, input.businessId);
+        if (activeOrder && !input.active)
+          throw new Error(
+            "Complete the active order before deactivating this table.",
+          );
+        sqlite
+          .prepare(
+            "UPDATE restaurant_tables SET name = ?, capacity = ?, active = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+          )
+          .run(
+            name,
+            capacity,
+            input.active ? 1 : 0,
+            now(),
+            input.id,
+            input.businessId,
+          );
+      })();
+    } catch (cause) {
+      if (String(cause).includes("restaurant_tables_business_name_unique"))
+        throw new Error("A table with this name already exists.");
+      throw cause;
+    }
+    return listAvailableTables(input.businessId).find(
+      (table) => table.id === input.id,
+    )!;
+  }
+
+  function setTableReservationState(
+    businessId: string,
+    tableId: string,
+    reserved: boolean,
+  ): PosTable {
+    sqlite.transaction(() => {
+      const table = sqlite
+        .prepare(
+          "SELECT id, status FROM restaurant_tables WHERE id = ? AND business_id = ? AND active = 1",
+        )
+        .get(tableId, businessId) as { id: string; status: string } | undefined;
+      if (!table) throw new Error("Table is unavailable.");
+      const activeOrder = sqlite
+        .prepare(
+          "SELECT 1 FROM orders WHERE table_id = ? AND business_id = ? AND order_type = 'dine_in' AND status IN ('open', 'sent_to_kitchen', 'preparing', 'ready') LIMIT 1",
+        )
+        .get(tableId, businessId);
+      if (activeOrder) throw new Error("Table already has an active order.");
+      if (!reserved && table.status !== "reserved") return;
+      sqlite
+        .prepare(
+          "UPDATE restaurant_tables SET status = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        )
+        .run(reserved ? "reserved" : "available", now(), tableId, businessId);
+    })();
+    return listAvailableTables(businessId).find(
+      (table) => table.id === tableId,
+    )!;
   }
 
   function createOrder(input: CreateOrderInput): PosOrder {
@@ -448,6 +596,13 @@ export function createPosService(sqlite: Database.Database) {
           )
           .get(input.tableId, input.businessId);
         if (!table) throw new Error("The selected table is unavailable.");
+        const activeOrder = sqlite
+          .prepare(
+            "SELECT 1 FROM orders WHERE table_id = ? AND business_id = ? AND order_type = 'dine_in' AND status IN ('open', 'sent_to_kitchen', 'preparing', 'ready') LIMIT 1",
+          )
+          .get(input.tableId, input.businessId);
+        if (activeOrder)
+          throw new Error("This table already has an active order.");
       }
       const next = sqlite
         .prepare(
@@ -469,6 +624,12 @@ export function createPosService(sqlite: Database.Database) {
           createdAt,
           createdAt,
         );
+      if (input.tableId)
+        sqlite
+          .prepare(
+            "UPDATE restaurant_tables SET status = 'occupied', updated_at = ? WHERE id = ? AND business_id = ?",
+          )
+          .run(createdAt, input.tableId, input.businessId);
     })();
     return getOrder(id, input.businessId);
   }
@@ -612,6 +773,50 @@ export function createPosService(sqlite: Database.Database) {
         `SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = ? AND o.status IN ${mutableOrderStatuses} ORDER BY o.opened_at DESC, o.order_number DESC`,
       )
       .all(businessId) as OpenOrderSummary[];
+  }
+
+  function completeOrder(orderId: string, businessId: string): PosOrder {
+    sqlite.transaction(() => {
+      const order = sqlite
+        .prepare(
+          "SELECT id, table_id AS tableId, order_type AS orderType, status FROM orders WHERE id = ? AND business_id = ?",
+        )
+        .get(orderId, businessId) as
+        | {
+            id: string;
+            tableId: string | null;
+            orderType: string;
+            status: string;
+          }
+        | undefined;
+      if (!order) throw new Error("Order not found.");
+      if (
+        !["open", "sent_to_kitchen", "preparing", "ready"].includes(
+          order.status,
+        )
+      )
+        throw new Error("Only an active order can be completed.");
+      const completedAt = now();
+      sqlite
+        .prepare(
+          "UPDATE orders SET status = 'completed', closed_at = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        )
+        .run(completedAt, completedAt, orderId, businessId);
+      if (order.orderType === "dine_in" && order.tableId)
+        sqlite
+          .prepare(
+            "UPDATE restaurant_tables SET status = 'available', updated_at = ? WHERE id = ? AND business_id = ? AND NOT EXISTS (SELECT 1 FROM orders WHERE table_id = ? AND business_id = ? AND id <> ? AND order_type = 'dine_in' AND status IN ('open', 'sent_to_kitchen', 'preparing', 'ready'))",
+          )
+          .run(
+            completedAt,
+            order.tableId,
+            businessId,
+            order.tableId,
+            businessId,
+            orderId,
+          );
+    })();
+    return getOrder(orderId, businessId);
   }
 
   function mapInventory(row: {
@@ -1007,6 +1212,10 @@ export function createPosService(sqlite: Database.Database) {
     updateMenuCategory,
     getOrder,
     listAvailableTables,
+    createTable,
+    updateTable,
+    setTableReservationState,
+    completeOrder,
     listOpenOrders,
     sendOrderToKitchen,
     updateOrderItemNote,

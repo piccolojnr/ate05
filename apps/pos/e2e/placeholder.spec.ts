@@ -57,7 +57,44 @@ test("renders local seating data", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Tables" }).click();
   await expect(page.getByRole("heading", { name: "Tables" })).toBeVisible();
-  await expect(page.getByText("T1")).toBeVisible();
+  await expect(page.getByText("Table 1")).toBeVisible();
+});
+
+test("operator can turn over a table through explicit order completion", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.removeItem("ate05-pos-browser-preview-v1"),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "Tables" }).click();
+  await page.getByRole("button", { name: "Add Table" }).click();
+  await page.getByRole("dialog").getByLabel("Table name").fill("Patio 1");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Add table" })
+    .click();
+  await expect(page.getByText("Patio 1")).toBeVisible();
+  await page.getByRole("button", { name: "Start Order" }).last().click();
+  await page.getByRole("button", { name: "Add Fried Rice" }).click();
+  await expect(page.getByLabel("Current order")).toContainText("Patio 1");
+
+  await page.getByRole("button", { name: "Tables" }).click();
+  await expect(page.getByText("Active order at this table")).toBeVisible();
+  await page.getByRole("button", { name: "Open Order" }).click();
+  await page.getByRole("button", { name: "Confirm Payment" }).click();
+  await page.getByRole("button", { name: "Tables" }).click();
+  await expect(page.getByText("Active order at this table")).toBeVisible();
+
+  await page.getByRole("button", { name: "Open Order" }).click();
+  await page
+    .getByRole("button", { name: "Complete Order · Release Table" })
+    .click();
+  await page.getByRole("button", { name: "Tables" }).click();
+  await expect(
+    page.getByText("Available for a new dine-in order").last(),
+  ).toBeVisible();
 });
 
 test("operator can manage persisted menu items and use them in POS", async ({

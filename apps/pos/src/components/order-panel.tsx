@@ -285,6 +285,7 @@ export function OrderPanel({
   onReprintTicket,
   onRecordPayment,
   onReprintReceipt,
+  onCompleteOrder,
 }: {
   order: PosOrder | null;
   onQuantityChange: (id: string, quantity: number) => void;
@@ -296,6 +297,7 @@ export function OrderPanel({
     input: Parameters<PosClient["recordPayment"]>[0],
   ) => Promise<void>;
   onReprintReceipt: () => Promise<void>;
+  onCompleteOrder: () => Promise<void>;
 }) {
   const items = order?.items ?? [];
   const pendingPrints =
@@ -487,6 +489,19 @@ export function OrderPanel({
             ) : null}
           </Button>
         </div>
+        {order &&
+        order.orderType === "dine_in" &&
+        ["open", "sent_to_kitchen", "preparing", "ready"].includes(
+          order.status,
+        ) ? (
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={() => void onCompleteOrder()}
+          >
+            Complete Order · Release Table
+          </Button>
+        ) : null}
       </div>
     </aside>
   );

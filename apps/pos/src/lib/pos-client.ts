@@ -55,6 +55,7 @@ export interface RestaurantTable {
   id: string;
   name: string;
   capacity: number;
+  active: boolean;
   status: "available" | "occupied" | "reserved";
 }
 
@@ -180,6 +181,22 @@ export interface PosClient {
     orderType: OrderType;
     tableId?: string | null;
   }): Promise<PosOrder>;
+  createTable(input: {
+    name: string;
+    capacity?: number;
+    active?: boolean;
+  }): Promise<RestaurantTable>;
+  updateTable(input: {
+    id: string;
+    name: string;
+    capacity?: number;
+    active: boolean;
+  }): Promise<RestaurantTable>;
+  setTableReservationState(
+    tableId: string,
+    reserved: boolean,
+  ): Promise<RestaurantTable>;
+  completeOrder(orderId: string): Promise<PosOrder>;
   getOrder(orderId: string): Promise<PosOrder>;
   updateOrderItemQuantity(
     orderId: string,

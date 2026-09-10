@@ -227,6 +227,37 @@ export function App() {
       );
     }
   }
+  function startTableOrder(tableId: string) {
+    setOrder(null);
+    setOrderType("dine_in");
+    setTableId(tableId);
+    setCategory("All");
+    setActiveScreen("POS");
+  }
+  function openTableOrder(tableId: string) {
+    const summary = bootstrap?.openOrders.find(
+      (entry) => entry.tableId === tableId,
+    );
+    if (summary) void openOrder(summary);
+    else notify.error("No active order was found for this table.");
+  }
+  async function completeCurrentOrder() {
+    if (!order) return;
+    try {
+      const completed = await client.completeOrder(order.id);
+      setOrder(completed);
+      await refresh();
+      notify.success(
+        `${String(completed.orderNumber).padStart(4, "0")} completed. Table is now available.`,
+      );
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to complete this order.",
+      );
+    }
+  }
   function startNewOrder() {
     setOrder(null);
     setOrderType("dine_in");
@@ -270,6 +301,18 @@ export function App() {
       );
     }
   }
+  async function tableAction(action: () => Promise<unknown>) {
+    try {
+      await action();
+      await refresh();
+      notify.success("Table updated.");
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to update table.",
+      );
+      throw cause;
+    }
+  }
   const content =
     activeScreen === "POS" ? (
       <div className="flex min-h-0 flex-1 gap-6">
@@ -300,6 +343,7 @@ export function App() {
           onReprintTicket={(ticketId) => void reprintTicket(ticketId)}
           onRecordPayment={recordPayment}
           onReprintReceipt={reprintReceipt}
+          onCompleteOrder={completeCurrentOrder}
         />
       </div>
     ) : (
@@ -312,7 +356,16 @@ export function App() {
           />
         )}
         {activeScreen === "Tables" && (
-          <TablesScreen tables={bootstrap?.tables ?? []} />
+          <TablesScreen
+            tables={bootstrap?.tables ?? []}
+            onCreate={(input) => tableAction(() => client.createTable(input))}
+            onUpdate={(input) => tableAction(() => client.updateTable(input))}
+            onReserve={(id, reserved) =>
+              tableAction(() => client.setTableReservationState(id, reserved))
+            }
+            onStartOrder={startTableOrder}
+            onOpenOrder={openTableOrder}
+          />
         )}
         {activeScreen === "Menu" && menuManagement ? (
           <MenuScreen

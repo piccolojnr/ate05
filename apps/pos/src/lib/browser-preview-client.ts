@@ -25,6 +25,7 @@ interface PreviewState {
   nextReceiptNumber: number;
   orders: PosOrder[];
   printers: PosPrinterConfig[];
+  tables?: RestaurantTable[];
   inventory: InventoryItem[];
   movements: StockMovement[];
   menuCategories?: Array<MenuCategory & { active: boolean; updatedAt: string }>;
@@ -72,6 +73,7 @@ const tables: RestaurantTable[] = [1, 2, 3, 4].map((number) => ({
   id: `00000000-0000-4000-8000-00000000003${number - 1}`,
   name: `Table ${number}`,
   capacity: 4,
+  active: true,
   status: "available",
 }));
 
@@ -89,6 +91,7 @@ function readState(): PreviewState {
       };
   state.nextReceiptNumber ??= 1;
   state.printers ??= [];
+  state.tables ??= tables;
   state.inventory ??= [];
   state.movements ??= [];
   state.menuCategories ??= categories.map((category) => ({
@@ -258,7 +261,11 @@ export function createBrowserPreviewClient(): PosClient {
       const occupied = new Set(
         state.orders
           .filter(
-            (order) => order.orderType === "dine_in" && order.status === "open",
+            (order) =>
+              order.orderType === "dine_in" &&
+              ["open", "sent_to_kitchen", "preparing", "ready"].includes(
+                order.status,
+              ),
           )
           .map((order) => order.tableId),
       );
@@ -274,15 +281,19 @@ export function createBrowserPreviewClient(): PosClient {
               (category) => category.id === item.categoryId && category.active,
             ),
         ),
-        tables: tables.map((table) => ({
+        tables: state.tables!.map((table) => ({
           ...table,
           status: occupied.has(table.id) ? "occupied" : table.status,
         })),
         openOrders: state.orders
           .filter((order) =>
-            ["open", "sent_to_kitchen", "preparing", "completed"].includes(
-              order.status,
-            ),
+            [
+              "open",
+              "sent_to_kitchen",
+              "preparing",
+              "ready",
+              "completed",
+            ].includes(order.status),
           )
           .map((order) => ({
             id: order.id,
@@ -412,6 +423,111 @@ export function createBrowserPreviewClient(): PosClient {
       writeState(state);
       return category;
     },
+    async createTable(input) {
+      const name = input.name.trim();
+      if (!name) throw new Error("Table name is required.");
+      const capacity = input.capacity ?? 4;
+      if (!Number.isSafeInteger(capacity) || capacity <= 0)
+        throw new Error("Table capacity must be a positive whole number.");
+      const state = readState();
+      if (
+        state.tables!.some(
+          (table) => table.name.toLowerCase() === name.toLowerCase(),
+        )
+      )
+        throw new Error("A table with this name already exists.");
+      const table: RestaurantTable = {
+        id: crypto.randomUUID(),
+        name,
+        capacity,
+        active: input.active !== false,
+        status: "available",
+      };
+      state.tables!.push(table);
+      writeState(state);
+      return table;
+    },
+    async updateTable(input) {
+      const state = readState();
+      const table = state.tables!.find((entry) => entry.id === input.id);
+      if (!table) throw new Error("Table not found.");
+      const name = input.name.trim();
+      if (!name) throw new Error("Table name is required.");
+      if (
+        state.tables!.some(
+          (entry) =>
+            entry.id !== input.id &&
+            entry.name.toLowerCase() === name.toLowerCase(),
+        )
+      )
+        throw new Error("A table with this name already exists.");
+      if (
+        !input.active &&
+        state.orders.some(
+          (order) =>
+            order.tableId === input.id &&
+            ["open", "sent_to_kitchen", "preparing", "ready"].includes(
+              order.status,
+            ),
+        )
+      )
+        throw new Error(
+          "Complete the active order before deactivating this table.",
+        );
+      Object.assign(table, {
+        name,
+        capacity: input.capacity ?? table.capacity,
+        active: input.active,
+      });
+      writeState(state);
+      return table;
+    },
+    async setTableReservationState(tableId, reserved) {
+      const state = readState();
+      const table = state.tables!.find((entry) => entry.id === tableId);
+      if (!table || !table.active) throw new Error("Table is unavailable.");
+      if (
+        state.orders.some(
+          (order) =>
+            order.tableId === tableId &&
+            ["open", "sent_to_kitchen", "preparing", "ready"].includes(
+              order.status,
+            ),
+        )
+      )
+        throw new Error("Table already has an active order.");
+      table.status = reserved ? "reserved" : "available";
+      writeState(state);
+      return table;
+    },
+    async completeOrder(orderId) {
+      const state = readState();
+      const order = state.orders.find((entry) => entry.id === orderId);
+      if (!order) throw new Error("Order not found.");
+      if (
+        !["open", "sent_to_kitchen", "preparing", "ready"].includes(
+          order.status,
+        )
+      )
+        throw new Error("Only an active order can be completed.");
+      order.status = "completed";
+      if (
+        order.tableId &&
+        !state.orders.some(
+          (entry) =>
+            entry.id !== order.id &&
+            entry.tableId === order.tableId &&
+            ["open", "sent_to_kitchen", "preparing", "ready"].includes(
+              entry.status,
+            ),
+        )
+      ) {
+        const table = state.tables!.find((entry) => entry.id === order.tableId);
+        if (table) table.status = "available";
+      }
+      writeState(state);
+      return order;
+    },
     async addMenuItem(input) {
       const state = readState();
       const menuItem = state.menuItems!.find(
@@ -424,6 +540,22 @@ export function createBrowserPreviewClient(): PosClient {
       if (!order) {
         if (input.orderType === "dine_in" && !input.tableId)
           throw new Error("Select a table for a dine-in order.");
+        if (input.tableId) {
+          const table = state.tables!.find(
+            (entry) => entry.id === input.tableId && entry.active,
+          );
+          if (!table) throw new Error("The selected table is unavailable.");
+          if (
+            state.orders.some(
+              (entry) =>
+                entry.tableId === input.tableId &&
+                ["open", "sent_to_kitchen", "preparing", "ready"].includes(
+                  entry.status,
+                ),
+            )
+          )
+            throw new Error("This table already has an active order.");
+        }
         order = {
           id: crypto.randomUUID(),
           businessId,
@@ -432,7 +564,8 @@ export function createBrowserPreviewClient(): PosClient {
           tableId:
             input.orderType === "takeaway" ? null : (input.tableId ?? null),
           tableName:
-            tables.find((table) => table.id === input.tableId)?.name ?? null,
+            state.tables!.find((table) => table.id === input.tableId)?.name ??
+            null,
           status: "open",
           paymentStatus: "unpaid",
           subtotalMinor: 0,
@@ -446,6 +579,12 @@ export function createBrowserPreviewClient(): PosClient {
           kitchenChangesPending: false,
         };
         state.orders.push(order);
+        if (order.tableId) {
+          const table = state.tables!.find(
+            (entry) => entry.id === order!.tableId,
+          );
+          if (table) table.status = "occupied";
+        }
       }
       if (!["open", "sent_to_kitchen", "preparing"].includes(order.status))
         throw new Error("This order can no longer be changed.");

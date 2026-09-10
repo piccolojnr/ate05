@@ -763,12 +763,12 @@ export function createTauriClient(): PosClient {
       );
       const tables = await select<Row>(
         db,
-        "SELECT t.id, t.name, t.capacity, CASE WHEN EXISTS (SELECT 1 FROM orders o WHERE o.table_id = t.id AND o.business_id = t.business_id AND o.order_type = 'dine_in' AND o.status IN ('open', 'sent_to_kitchen', 'preparing', 'ready')) THEN 'occupied' ELSE t.status END AS status FROM restaurant_tables t WHERE t.business_id = $1 AND t.active = 1 ORDER BY t.name",
+        "SELECT t.id, t.name, t.capacity, t.active, CASE WHEN EXISTS (SELECT 1 FROM orders o WHERE o.table_id = t.id AND o.business_id = t.business_id AND o.order_type = 'dine_in' AND o.status IN ('open', 'sent_to_kitchen', 'preparing', 'ready')) THEN 'occupied' ELSE t.status END AS status FROM restaurant_tables t WHERE t.business_id = $1 ORDER BY t.active DESC, t.name",
         [businessId],
       );
       const openOrders = await select<Row>(
         db,
-        "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt, COALESCE((SELECT SUM(p.amount_minor) FROM payments p WHERE p.order_id = o.id AND p.business_id = o.business_id AND p.status = 'recorded'), 0) AS amountPaidMinor FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = $1 AND o.status IN ('open', 'sent_to_kitchen', 'preparing', 'completed') ORDER BY o.opened_at DESC, o.order_number DESC",
+        "SELECT o.id, o.business_id AS businessId, o.order_number AS orderNumber, o.order_type AS orderType, o.table_id AS tableId, t.name AS tableName, o.status, o.payment_status AS paymentStatus, o.subtotal_minor AS subtotalMinor, o.total_minor AS totalMinor, o.opened_at AS openedAt, COALESCE((SELECT SUM(p.amount_minor) FROM payments p WHERE p.order_id = o.id AND p.business_id = o.business_id AND p.status = 'recorded'), 0) AS amountPaidMinor FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id WHERE o.business_id = $1 AND o.status IN ('open', 'sent_to_kitchen', 'preparing', 'ready', 'completed') ORDER BY o.opened_at DESC, o.order_number DESC",
         [businessId],
       );
       const inventory = await listInventoryRows(db);
@@ -791,6 +791,7 @@ export function createTauriClient(): PosClient {
           id: asString(row.id),
           name: asString(row.name),
           capacity: asNumber(row.capacity),
+          active: Boolean(asNumber(row.active)),
           status: asString(row.status) as "available" | "occupied" | "reserved",
         })),
         openOrders: openOrders.map((row) => mapOrder(row, [])),
@@ -960,6 +961,173 @@ export function createTauriClient(): PosClient {
         sortOrder: asNumber(category.sortOrder),
       };
     },
+    async createTable(input) {
+      const name = input.name.trim();
+      if (!name)
+        throw new PosClientError("validation", "Table name is required.");
+      const capacity = input.capacity ?? 4;
+      if (!Number.isSafeInteger(capacity) || capacity <= 0)
+        throw new PosClientError(
+          "validation",
+          "Table capacity must be a positive whole number.",
+        );
+      const db = await database();
+      const [duplicate] = await select<Row>(
+        db,
+        "SELECT id FROM restaurant_tables WHERE business_id = $1 AND lower(name) = lower($2)",
+        [businessId, name],
+      );
+      if (duplicate)
+        throw new PosClientError(
+          "invalid_state",
+          "A table with this name already exists.",
+        );
+      const id = crypto.randomUUID();
+      await execute(
+        db,
+        "INSERT INTO restaurant_tables (id, business_id, name, capacity, status, active, created_at, updated_at) VALUES ($1, $2, $3, $4, 'available', $5, $6, $6)",
+        [
+          id,
+          businessId,
+          name,
+          capacity,
+          input.active === false ? 0 : 1,
+          timestamp(),
+        ],
+      );
+      const [table] = await select<Row>(
+        db,
+        "SELECT id, name, capacity, active, status FROM restaurant_tables WHERE id = $1 AND business_id = $2",
+        [id, businessId],
+      );
+      return {
+        id,
+        name: asString(table?.name),
+        capacity: asNumber(table?.capacity),
+        active: Boolean(asNumber(table?.active)),
+        status: asString(table?.status) as
+          "available" | "occupied" | "reserved",
+      };
+    },
+    async updateTable(input) {
+      const name = input.name.trim();
+      if (!name)
+        throw new PosClientError("validation", "Table name is required.");
+      const capacity = input.capacity ?? 4;
+      if (!Number.isSafeInteger(capacity) || capacity <= 0)
+        throw new PosClientError(
+          "validation",
+          "Table capacity must be a positive whole number.",
+        );
+      const db = await database();
+      const [table] = await select<Row>(
+        db,
+        "SELECT id FROM restaurant_tables WHERE id = $1 AND business_id = $2",
+        [input.id, businessId],
+      );
+      if (!table) throw new PosClientError("not_found", "Table not found.");
+      const [activeOrder] = await select<Row>(
+        db,
+        "SELECT 1 FROM orders WHERE table_id = $1 AND business_id = $2 AND order_type = 'dine_in' AND status IN ('open', 'sent_to_kitchen', 'preparing', 'ready') LIMIT 1",
+        [input.id, businessId],
+      );
+      if (activeOrder && !input.active)
+        throw new PosClientError(
+          "invalid_state",
+          "Complete the active order before deactivating this table.",
+        );
+      const [duplicate] = await select<Row>(
+        db,
+        "SELECT id FROM restaurant_tables WHERE business_id = $1 AND lower(name) = lower($2) AND id <> $3",
+        [businessId, name, input.id],
+      );
+      if (duplicate)
+        throw new PosClientError(
+          "invalid_state",
+          "A table with this name already exists.",
+        );
+      await execute(
+        db,
+        "UPDATE restaurant_tables SET name = $1, capacity = $2, active = $3, updated_at = $4 WHERE id = $5 AND business_id = $6",
+        [
+          name,
+          capacity,
+          input.active ? 1 : 0,
+          timestamp(),
+          input.id,
+          businessId,
+        ],
+      );
+      return (await this.bootstrap()).tables.find(
+        (entry) => entry.id === input.id,
+      )!;
+    },
+    async setTableReservationState(tableId, reserved) {
+      const db = await database();
+      const [table] = await select<Row>(
+        db,
+        "SELECT id, status FROM restaurant_tables WHERE id = $1 AND business_id = $2 AND active = 1",
+        [tableId, businessId],
+      );
+      if (!table)
+        throw new PosClientError("not_found", "Table is unavailable.");
+      const [activeOrder] = await select<Row>(
+        db,
+        "SELECT 1 FROM orders WHERE table_id = $1 AND business_id = $2 AND order_type = 'dine_in' AND status IN ('open', 'sent_to_kitchen', 'preparing', 'ready') LIMIT 1",
+        [tableId, businessId],
+      );
+      if (activeOrder)
+        throw new PosClientError(
+          "invalid_state",
+          "Table already has an active order.",
+        );
+      await execute(
+        db,
+        "UPDATE restaurant_tables SET status = $1, updated_at = $2 WHERE id = $3 AND business_id = $4",
+        [reserved ? "reserved" : "available", timestamp(), tableId, businessId],
+      );
+      return (await this.bootstrap()).tables.find(
+        (entry) => entry.id === tableId,
+      )!;
+    },
+    async completeOrder(orderId) {
+      const db = await database();
+      await execute(db, "BEGIN IMMEDIATE");
+      try {
+        const [order] = await select<Row>(
+          db,
+          "SELECT id, table_id AS tableId, order_type AS orderType, status FROM orders WHERE id = $1 AND business_id = $2",
+          [orderId, businessId],
+        );
+        if (!order) throw new PosClientError("not_found", "Order not found.");
+        if (
+          !["open", "sent_to_kitchen", "preparing", "ready"].includes(
+            asString(order.status),
+          )
+        )
+          throw new PosClientError(
+            "invalid_state",
+            "Only an active order can be completed.",
+          );
+        const completedAt = timestamp();
+        await execute(
+          db,
+          "UPDATE orders SET status = 'completed', closed_at = $1, updated_at = $1 WHERE id = $2 AND business_id = $3",
+          [completedAt, orderId, businessId],
+        );
+        if (asString(order.orderType) === "dine_in" && order.tableId)
+          await execute(
+            db,
+            "UPDATE restaurant_tables SET status = 'available', updated_at = $1 WHERE id = $2 AND business_id = $3 AND NOT EXISTS (SELECT 1 FROM orders WHERE table_id = $2 AND business_id = $3 AND id <> $4 AND order_type = 'dine_in' AND status IN ('open', 'sent_to_kitchen', 'preparing', 'ready'))",
+            [completedAt, asString(order.tableId), businessId, orderId],
+          );
+        await execute(db, "COMMIT");
+      } catch (error) {
+        await execute(db, "ROLLBACK");
+        throw error;
+      }
+      return getOrder(db, orderId);
+    },
     async addMenuItem(input) {
       if (!input.menuItemId)
         throw new PosClientError("validation", "A menu item is required.");
@@ -999,6 +1167,16 @@ export function createTauriClient(): PosClient {
                 "not_found",
                 "The selected table is unavailable.",
               );
+            const [activeOrder] = await select<Row>(
+              db,
+              "SELECT 1 FROM orders WHERE table_id = $1 AND business_id = $2 AND order_type = 'dine_in' AND status IN ('open', 'sent_to_kitchen', 'preparing', 'ready') LIMIT 1",
+              [input.tableId, businessId],
+            );
+            if (activeOrder)
+              throw new PosClientError(
+                "invalid_state",
+                "This table already has an active order.",
+              );
           }
           const [next] = await select<Row>(
             db,
@@ -1019,6 +1197,11 @@ export function createTauriClient(): PosClient {
               createdBy,
               now,
             ],
+          );
+          await execute(
+            db,
+            "UPDATE restaurant_tables SET status = 'occupied', updated_at = $1 WHERE id = $2 AND business_id = $3",
+            [timestamp(), input.tableId, businessId],
           );
         }
         const [existingOrder] = await select<Row>(

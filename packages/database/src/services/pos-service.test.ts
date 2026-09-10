@@ -269,6 +269,125 @@ describe("POS application service", () => {
     ).toBe("occupied");
   });
 
+  it("creates and manages business-scoped tables with reservation state", () => {
+    const patio = service.createTable({
+      businessId: business,
+      name: "Patio 1",
+      capacity: 6,
+    });
+    expect(patio).toMatchObject({
+      name: "Patio 1",
+      capacity: 6,
+      active: true,
+      status: "available",
+    });
+    expect(() =>
+      service.createTable({ businessId: business, name: "patio 1" }),
+    ).toThrow("already exists");
+    const renamed = service.updateTable({
+      businessId: business,
+      id: patio.id,
+      name: "Patio Main",
+      capacity: 6,
+      active: true,
+    });
+    expect(renamed.name).toBe("Patio Main");
+    expect(
+      service.setTableReservationState(business, patio.id, true).status,
+    ).toBe("reserved");
+    expect(
+      service.setTableReservationState(business, patio.id, false).status,
+    ).toBe("available");
+    expect(() =>
+      service.updateTable({
+        businessId: "00000000-0000-4000-8000-000000000901",
+        id: patio.id,
+        name: "Other business table",
+        active: true,
+      }),
+    ).toThrow("not found");
+  });
+
+  it("guards table occupancy and releases it only on explicit completion", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "dine_in",
+      tableId: table1,
+    });
+    expect(
+      service
+        .listAvailableTables(business)
+        .find((table) => table.id === table1),
+    ).toMatchObject({ status: "occupied" });
+    database.sqlite
+      .prepare("UPDATE orders SET payment_status = 'paid' WHERE id = ?")
+      .run(order.id);
+    expect(
+      service
+        .listAvailableTables(business)
+        .find((table) => table.id === table1),
+    ).toMatchObject({ status: "occupied" });
+    expect(() =>
+      service.addMenuItem({
+        businessId: business,
+        createdBy: owner,
+        menuItemId: coke,
+        orderType: "dine_in",
+        tableId: table1,
+      }),
+    ).toThrow("already has an active order");
+    expect(() =>
+      service.updateTable({
+        businessId: business,
+        id: table1,
+        name: "Table 1",
+        active: false,
+      }),
+    ).toThrow("Complete the active order");
+    const completed = service.completeOrder(order.id, business);
+    expect(completed.status).toBe("completed");
+    expect(completed.tableId).toBe(table1);
+    expect(
+      service
+        .listAvailableTables(business)
+        .find((table) => table.id === table1),
+    ).toMatchObject({ status: "available" });
+  });
+
+  it("does not allow deactivated tables to start new orders", () => {
+    const table = service.createTable({ businessId: business, name: "Back 1" });
+    service.updateTable({
+      businessId: business,
+      id: table.id,
+      name: table.name,
+      active: false,
+    });
+    expect(() =>
+      service.addMenuItem({
+        businessId: business,
+        createdBy: owner,
+        menuItemId: friedRice,
+        orderType: "dine_in",
+        tableId: table.id,
+      }),
+    ).toThrow("unavailable");
+    expect(
+      service
+        .listAvailableTables(business)
+        .find((entry) => entry.id === table.id),
+    ).toMatchObject({ active: false });
+    expect(
+      service.updateTable({
+        businessId: business,
+        id: table.id,
+        name: table.name,
+        active: true,
+      }).active,
+    ).toBe(true);
+  });
+
   it("keeps business-scoped reads isolated", () => {
     database.sqlite
       .prepare(
