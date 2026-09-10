@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { Button, Card, Input } from "@ate05/ui";
+import { Button, Card, Input, Select } from "@ate05/ui";
 import { PageHeader } from "../../components/page-header";
 import { StatusBadge } from "../../components/status-badge";
 import type {
@@ -108,7 +108,7 @@ function InventoryActionDialog({
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/30 p-4">
       <Card
-        className="w-full max-w-md p-6 shadow-float"
+        className="w-full max-w-md p-6 shadow-floating"
         role="dialog"
         aria-modal="true"
         aria-labelledby="inventory-action-title"
@@ -242,7 +242,7 @@ function NewInventoryItemDialog({
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/30 p-4">
       <Card
-        className="w-full max-w-lg p-6 shadow-float"
+        className="w-full max-w-lg p-6 shadow-floating"
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-inventory-title"
@@ -274,9 +274,9 @@ function NewInventoryItemDialog({
           <div className="grid gap-4 sm:grid-cols-3">
             <label className="block text-sm font-semibold">
               Canonical unit
-              <select
+              <Select
                 aria-label="Inventory unit"
-                className="mt-1 min-h-10 w-full rounded-md border bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="mt-1 min-h-10"
                 value={unit}
                 onChange={(event) =>
                   setUnit(event.target.value as InventoryUnit)
@@ -285,7 +285,7 @@ function NewInventoryItemDialog({
                 {units.map((value) => (
                   <option key={value}>{value}</option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label className="block text-sm font-semibold">
               Starting quantity

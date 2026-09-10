@@ -1,5 +1,5 @@
 import { useState, type ComponentProps, type FormEvent } from "react";
-import { Badge, Button, Card, Input } from "@ate05/ui";
+import { Badge, Button, Card, Checkbox, Input, Select } from "@ate05/ui";
 import { PageHeader } from "../../components/page-header";
 import { StatusBadge } from "../../components/status-badge";
 import { isTauriRuntime } from "../../lib/get-pos-client";
@@ -112,17 +112,19 @@ function PrinterSettingsCard({
             {description}
           </p>
         </div>
-        <StatusBadge
-          value={
-            testState === "success"
-              ? "success"
-              : testState === "failed"
+        {testState === "success" ? (
+          <Badge tone="success">Test succeeded</Badge>
+        ) : (
+          <StatusBadge
+            value={
+              testState === "failed"
                 ? "failed"
                 : printer?.active
                   ? "active"
                   : "inactive"
-          }
-        />
+            }
+          />
+        )}
       </div>
       <form className="p-5" onSubmit={(event) => void save(event)}>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -160,9 +162,9 @@ function PrinterSettingsCard({
           </label>
           <label className="text-sm font-semibold">
             Paper width
-            <select
+            <Select
               aria-label={`${title} paper width`}
-              className="mt-1 min-h-10 w-full rounded-md border bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="mt-1 min-h-10"
               value={paperWidth}
               onChange={(event) =>
                 setPaperWidth(Number(event.target.value) as 58 | 80)
@@ -170,12 +172,12 @@ function PrinterSettingsCard({
             >
               <option value={80}>80 mm</option>
               <option value={58}>58 mm</option>
-            </select>
+            </Select>
           </label>
         </div>
         <div className="mt-5 flex flex-wrap gap-x-6 gap-y-3 text-sm">
           <label className="flex items-center gap-2 font-semibold">
-            <input
+            <Checkbox
               type="checkbox"
               checked={cutterEnabled}
               onChange={(event) => setCutterEnabled(event.target.checked)}
@@ -183,7 +185,7 @@ function PrinterSettingsCard({
             Cut paper after printing
           </label>
           <label className="flex items-center gap-2 font-semibold">
-            <input
+            <Checkbox
               type="checkbox"
               checked={active}
               onChange={(event) => setActive(event.target.checked)}

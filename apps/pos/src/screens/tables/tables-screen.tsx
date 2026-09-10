@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Button, Card, Input } from "@ate05/ui";
+import { Button, Card, Checkbox, Input } from "@ate05/ui";
 import { PageHeader } from "../../components/page-header";
 import { StatusBadge } from "../../components/status-badge";
 import type { RestaurantTable } from "../../lib/pos-client";
@@ -46,7 +46,7 @@ function TableDialog({
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/30 p-4">
       <Card
-        className="w-full max-w-md p-6 shadow-float"
+        className="w-full max-w-md p-6 shadow-floating"
         role="dialog"
         aria-modal="true"
         aria-labelledby="table-dialog-title"
@@ -85,7 +85,7 @@ function TableDialog({
             />
           </label>
           <label className="flex items-center gap-2 text-sm font-semibold">
-            <input
+            <Checkbox
               aria-label="Table active"
               type="checkbox"
               checked={active}
@@ -152,7 +152,7 @@ export function TablesScreen({
           shown
         </p>
         <label className="flex items-center gap-2 text-sm font-semibold">
-          <input
+          <Checkbox
             type="checkbox"
             checked={showInactive}
             onChange={(event) => setShowInactive(event.target.checked)}

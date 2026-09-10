@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { Button, Card, Input } from "@ate05/ui";
+import { Button, Card, Checkbox, Input, Select, Textarea } from "@ate05/ui";
 import { PageHeader } from "../../components/page-header";
 import { StatusBadge } from "../../components/status-badge";
 import {
@@ -126,20 +126,20 @@ function MenuItemForm({
           </label>
           <label className="block text-sm font-semibold">
             Description
-            <textarea
+            <Textarea
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Optional description"
-              className="mt-1 min-h-20 w-full rounded-md border bg-card px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="mt-1"
             />
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="block text-sm font-semibold">
               Category
-              <select
+              <Select
                 value={categoryId}
                 onChange={(event) => setCategoryId(event.target.value)}
-                className="mt-1 min-h-10 w-full rounded-md border bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="mt-1 min-h-10"
               >
                 {categories
                   .filter((category) => category.active)
@@ -148,7 +148,7 @@ function MenuItemForm({
                       {category.name}
                     </option>
                   ))}
-              </select>
+              </Select>
             </label>
             <label className="block text-sm font-semibold">
               Price (GHS)
@@ -163,7 +163,7 @@ function MenuItemForm({
           </div>
           <div className="flex flex-wrap gap-5 text-sm font-semibold">
             <label className="inline-flex items-center gap-2">
-              <input
+              <Checkbox
                 type="checkbox"
                 checked={available}
                 onChange={(event) => setAvailable(event.target.checked)}
@@ -171,7 +171,7 @@ function MenuItemForm({
               Available for sale
             </label>
             <label className="inline-flex items-center gap-2">
-              <input
+              <Checkbox
                 type="checkbox"
                 checked={active}
                 onChange={(event) => setActive(event.target.checked)}
@@ -255,11 +255,11 @@ export function MenuScreen({
               placeholder="Search items or categories"
             />
           </label>
-          <select
+          <Select
             aria-label="Filter menu category"
             value={categoryId}
             onChange={(event) => setCategoryId(event.target.value)}
-            className="min-h-10 rounded-md border bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="min-h-10 w-auto min-w-40"
           >
             <option value="all">All categories</option>
             {data.categories
@@ -269,7 +269,7 @@ export function MenuScreen({
                   {category.name}
                 </option>
               ))}
-          </select>
+          </Select>
           <div className="flex min-w-64 flex-1 gap-2">
             <Input
               aria-label="New category name"

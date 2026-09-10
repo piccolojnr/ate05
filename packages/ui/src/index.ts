@@ -1,11 +1,15 @@
-export { StatusMessage } from "./components/status-message";
-export type { StatusMessageProps } from "./components/status-message";
 export { Badge } from "./components/badge";
 export type { BadgeProps } from "./components/badge";
+export { Checkbox } from "./components/checkbox";
+export type { CheckboxProps } from "./components/checkbox";
 export { Button } from "./components/button";
 export type { ButtonProps } from "./components/button";
 export { Card } from "./components/card";
 export { Input } from "./components/input";
 export type { InputProps } from "./components/input";
+export { Select } from "./components/select";
+export type { SelectProps } from "./components/select";
+export { Textarea } from "./components/textarea";
+export type { TextareaProps } from "./components/textarea";
 export { cn } from "./lib/cn";
 export { Toaster, toast } from "./components/sonner";
