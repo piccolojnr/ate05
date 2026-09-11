@@ -117,18 +117,39 @@ test("operator can turn over a table through explicit order completion", async (
 test("operator can manage persisted menu items and use them in POS", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
   await page.evaluate(() =>
     localStorage.removeItem("ate05-pos-browser-preview-v1"),
   );
   await page.reload();
   await signIn(page);
   await page.getByRole("button", { name: "Menu", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Menu" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Menu", exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "New Menu Item" }).click();
   await page.getByLabel("Item name").fill("Garden Salad");
   await page.getByLabel("Price (GHS)").fill("28.50");
   await page.getByRole("button", { name: "Create item" }).click();
   await expect(page.getByText("Garden Salad").first()).toBeVisible();
+  await page.screenshot({
+    path: "docs/artifacts/menu-1024-populated.png",
+    fullPage: true,
+  });
+  const gardenSaladRow = page
+    .locator("article")
+    .filter({ hasText: "Garden Salad" });
+  await gardenSaladRow
+    .getByRole("button", { name: "Mark unavailable" })
+    .click();
+  await expect(
+    gardenSaladRow.getByRole("button", { name: "Make available" }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "docs/artifacts/menu-1024-unavailable.png",
+    fullPage: true,
+  });
+  await gardenSaladRow.getByRole("button", { name: "Make available" }).click();
   await page.getByRole("button", { name: "POS", exact: true }).click();
   await page.getByRole("button", { name: "Takeaway" }).click();
   await page.getByLabel("Search menu").fill("Garden Salad");
@@ -141,6 +162,11 @@ test("operator can manage persisted menu items and use them in POS", async ({
   await page.getByRole("button", { name: "Edit Garden Salad" }).click();
   await page.getByLabel("Price (GHS)").fill("30.00");
   await page.getByRole("button", { name: "Save changes" }).click();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({
+    path: "docs/artifacts/menu-1440-management.png",
+    fullPage: true,
+  });
   await page.getByRole("button", { name: "POS", exact: true }).click();
   await page.getByLabel("Search menu").fill("Garden Salad");
   await expect(

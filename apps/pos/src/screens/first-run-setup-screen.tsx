@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Button, Card, Input, Select } from "@ate05/ui";
 import type { AuthBootstrap } from "../lib/pos-client";
 
-type StarterPack = "empty" | "ghanaian" | "fast_food" | "drinks_snacks";
+type StarterPack = "empty" | "rice" | "counter_service";
 
 const packs: Array<{ id: StarterPack; name: string; description: string }> = [
   {
@@ -11,19 +11,14 @@ const packs: Array<{ id: StarterPack; name: string; description: string }> = [
     description: "Configure your menu later.",
   },
   {
-    id: "ghanaian",
-    name: "Ghanaian restaurant",
-    description: "A practical local-meals starter menu.",
+    id: "rice",
+    name: "ATE05 Rice Menu",
+    description: "Rice dishes, local favourites, proteins and soups.",
   },
   {
-    id: "fast_food",
-    name: "Fast food",
-    description: "Meals, wings and everyday drinks.",
-  },
-  {
-    id: "drinks_snacks",
-    name: "Drinks & snacks",
-    description: "A compact counter-service menu.",
+    id: "counter_service",
+    name: "Counter service",
+    description: "A compact everyday menu for quick service.",
   },
 ];
 
@@ -63,7 +58,7 @@ export function FirstRunSetupScreen({
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [starterPack, setStarterPack] = useState<StarterPack>(
-    (bootstrap.setupStarterPack as StarterPack) || "ghanaian",
+    (bootstrap.setupStarterPack as StarterPack) || "rice",
   );
   const [tableCount, setTableCount] = useState(
     String(bootstrap.setupTableCount ?? 10),

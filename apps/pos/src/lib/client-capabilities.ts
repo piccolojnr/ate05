@@ -33,7 +33,7 @@ export interface FirstRunSetupInput {
   ownerUserId: string;
   ownerName: string;
   ownerPin: string;
-  starterPack: "empty" | "ghanaian" | "fast_food" | "drinks_snacks";
+  starterPack: "empty" | "rice" | "counter_service";
   tableCount: number;
 }
 

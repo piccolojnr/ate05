@@ -24,7 +24,7 @@ import { TablesScreen } from "./screens/tables/tables-screen";
 import { MenuScreen } from "./screens/menu/menu-screen";
 import { InventoryScreen } from "./screens/inventory/inventory-screen";
 import { SettingsScreen } from "./screens/settings/settings-screen";
-import type { MenuManagementData } from "./lib/pos-client";
+import type { MenuManagementData, MenuManagementItem } from "./lib/pos-client";
 import { OrdersScreen } from "./screens/orders/orders-screen";
 import { AuthScreen } from "./screens/auth-screen";
 import { FirstRunSetupScreen } from "./screens/first-run-setup-screen";
@@ -141,6 +141,31 @@ export function App() {
     } catch (cause) {
       notify.error(
         cause instanceof Error ? cause.message : "Unable to create category.",
+      );
+    }
+  }
+  async function toggleMenuAvailability(item: MenuManagementItem) {
+    try {
+      await client.updateMenuItem({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        categoryId: item.categoryId,
+        sellingPriceMinor: item.sellingPriceMinor,
+        available: !item.available,
+        active: item.active,
+      });
+      await refreshMenu();
+      notify.success(
+        item.available
+          ? `${item.name} is unavailable.`
+          : `${item.name} is available.`,
+      );
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to update availability.",
       );
     }
   }
@@ -639,6 +664,7 @@ export function App() {
             onCreate={(input) => saveMenuItem(input)}
             onUpdate={(input) => saveMenuItem(input)}
             onCreateCategory={createMenuCategory}
+            onToggleAvailability={toggleMenuAvailability}
           />
         ) : null}
         {activeScreen === "Inventory" && (

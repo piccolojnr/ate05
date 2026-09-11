@@ -244,7 +244,7 @@ pub async fn complete_first_run_setup(
     if table_count > 100 {
         return Err("validation: Choose between 0 and 100 tables.".into());
     }
-    if !["empty", "ghanaian", "fast_food", "drinks_snacks"].contains(&starter_pack.as_str()) {
+    if !["empty", "rice", "counter_service"].contains(&starter_pack.as_str()) {
         return Err("validation: Choose a valid starter menu.".into());
     }
     let database = pool(&app).await?;
@@ -283,39 +283,93 @@ pub async fn complete_first_run_setup(
         .await
         .map_err(|_| "database: owner account could not be saved".to_string())?;
 
-    let packs: &[(&str, &str, &[(&str, i64)])] = match starter_pack.as_str() {
-        "ghanaian" => &[
+    let packs: &[(&str, &str, &[(&str, Option<&str>, i64)])] = match starter_pack.as_str() {
+        "rice" => &[
             (
-                "Main Meals",
-                "main-meals",
-                &[("Fried Rice", 5000), ("Jollof Rice", 5000)],
+                "Rice",
+                "rice",
+                &[
+                    ("Check Check Fried Rice", Some("Comes with medium sized chicken and coleslaw"), 4999),
+                    ("Check Check Jollof", Some("Comes with medium sized chicken and coleslaw"), 4999),
+                    ("Fried Rice", Some("Comes with medium sized chicken and coleslaw"), 4999),
+                    ("Jollof Rice", Some("Comes with medium sized chicken and coleslaw"), 4999),
+                    ("Assorted Fried Rice", Some("Comes with gizzard sauce"), 6999),
+                    ("Assorted Jollof Rice", Some("Comes with gizzard sauce"), 6999),
+                ],
             ),
             (
-                "Local Dishes",
-                "local-dishes",
-                &[("Waakye", 4500), ("Banku with Tilapia", 6500)],
+                "Proteins",
+                "proteins",
+                &[
+                    ("Grilled Chicken", None, 5000),
+                    ("Fried Chicken", None, 2500),
+                    ("Tilapia", None, 6000),
+                    ("Gizzard", None, 1000),
+                    ("Sausage", None, 500),
+                    ("Egg", None, 400),
+                ],
             ),
-            ("Drinks", "drinks", &[("Bottled Water", 500)]),
+            (
+                "Locals",
+                "locals",
+                &[
+                    ("Fufu", None, 1000),
+                    ("Rice Balls", None, 500),
+                    ("Tuozafi", None, 1000),
+                    ("Banku", None, 500),
+                ],
+            ),
+            (
+                "Atiéké",
+                "atieke",
+                &[
+                    ("Atiéké & Tilapia", Some("Atiéké, tilapia, aloko, green pepper sauce, sauce and stir fry"), 7999),
+                    ("Atiéké & Grilled Chicken", Some("Atiéké, grilled chicken, aloko, green pepper sauce, sauce and stir fry"), 9999),
+                    ("Assorted Atiéké", Some("Atiéké with a selection of proteins, aloko, green pepper sauce, sauce and stir fry"), 12000),
+                ],
+            ),
+            ("Loaded & Fries", "loaded-fries", &[("Loaded Fries", Some("Fries topped with chicken, sausage, gizzard, cheese sauce and special sauce"), 7000)]),
+            (
+                "Specials",
+                "specials",
+                &[
+                    ("Plantain Tapé Tapé — 5 Pieces Chicken Wings", Some("Comes with peppered chicken wings and spicy pepper sauce"), 5999),
+                    ("Plantain Tapé Tapé — 8 Pieces Chicken Wings", Some("Comes with peppered chicken wings and spicy pepper sauce"), 7999),
+                    ("Yam Chips with Chicken Wings — 5 Pieces", Some("Comes with peppered chicken wings and spicy pepper sauce"), 5999),
+                    ("Yam Chips with Chicken Wings — 8 Pieces", Some("Comes with peppered chicken wings and spicy pepper sauce"), 7999),
+                ],
+            ),
+            (
+                "Soups",
+                "soups",
+                &[
+                    ("Light Soup", Some("Price to be configured"), 0),
+                    ("Groundnut Soup", Some("Price to be configured"), 0),
+                    ("Bra", Some("Price to be configured"), 0),
+                    ("Ayoyo", Some("Price to be configured"), 0),
+                ],
+            ),
+            (
+                "Meat",
+                "meat",
+                &[
+                    ("Goat Meat", Some("Price to be configured"), 0),
+                    ("Cow Meat", Some("Price to be configured"), 0),
+                    ("Chicken", Some("Price to be configured"), 0),
+                ],
+            ),
         ],
-        "fast_food" => &[
+        "counter_service" => &[
             (
                 "Meals",
                 "meals",
-                &[("Chicken Burger", 4500), ("Chicken Wings", 3500)],
+                &[("Chicken Burger", None, 4500), ("Chicken Wings", None, 3500)],
             ),
             (
                 "Drinks",
                 "drinks",
-                &[("Coke", 1200), ("Bottled Water", 500)],
+                &[("Coke", None, 1200), ("Bottled Water", None, 500)],
             ),
-        ],
-        "drinks_snacks" => &[
-            (
-                "Drinks",
-                "drinks",
-                &[("Coke", 1200), ("Bottled Water", 500)],
-            ),
-            ("Snacks", "snacks", &[("Meat Pie", 1500), ("Chips", 2000)]),
         ],
         _ => &[],
     };
@@ -325,14 +379,14 @@ pub async fn complete_first_run_setup(
             .bind(&category_id).bind(business_id).bind(category_name).bind(&timestamp)
             .execute(&mut *transaction).await
             .map_err(|_| "database: starter menu could not be saved".to_string())?;
-        for (item_name, price) in *items {
+        for (item_name, description, price) in *items {
             let item_id = format!(
                 "setup-item-{}-{}",
                 category_key,
                 item_name.to_lowercase().replace(' ', "-")
             );
-            sqlx::query("INSERT OR IGNORE INTO menu_items (id, business_id, category_id, name, description, selling_price_minor, available, active, created_at, updated_at) VALUES ($1, $2, $3, $4, NULL, $5, 1, 1, $6, $6)")
-                .bind(item_id).bind(business_id).bind(&category_id).bind(item_name).bind(price).bind(&timestamp)
+            sqlx::query("INSERT OR IGNORE INTO menu_items (id, business_id, category_id, name, description, selling_price_minor, available, active, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 1, 1, $7, $7)")
+                .bind(item_id).bind(business_id).bind(&category_id).bind(item_name).bind(description).bind(price).bind(&timestamp)
                 .execute(&mut *transaction).await
                 .map_err(|_| "database: starter menu could not be saved".to_string())?;
         }

@@ -5,6 +5,7 @@
   "packageManager": "pnpm@12.3.4",
   "scripts": {
     "dev": "turbo dev --filter=@ate05/pos",
+    "dev:reset": "node scripts/reset-dev-data.mjs",
     "build": "turbo build",
     "test": "turbo test && playwright test",
     "test:unit": "turbo test",

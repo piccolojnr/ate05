@@ -27,9 +27,13 @@ Printers are intentionally optional during onboarding. Configure kitchen and
 receipt printers later in Settings. Starter menu prices are editable normal
 menu records; no inventory or recipe relationships are created.
 
-Available starter choices are Start empty, Ghanaian restaurant, Fast food, and
-Drinks & snacks. Tables are created as available with the standard capacity
-when a count is supplied.
+Available starter choices are Start empty, ATE05 Rice Menu, and Counter service.
+ATE05 Rice Menu is the default and includes Rice, Proteins, Locals, Atiéké,
+Loaded & Fries, Specials, Soups, and Meat. The supplied prices are editable
+suggestions. Items without a supplied price are included at GHS 0.00 with a
+Price to be configured description so they can be priced before selling.
+Tables are created as available with the standard capacity when a count is
+supplied.
 
 ## Resume and production safety
 
