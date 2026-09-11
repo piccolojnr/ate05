@@ -196,3 +196,21 @@ test("operator can configure independent kitchen and receipt printers", async ({
     "receipt.local",
   );
 });
+
+test("browser preview explains that database backups are native-only", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Protect local restaurant data" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Backup and restore are available in the native desktop app.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Back Up Now" }),
+  ).toBeDisabled();
+});

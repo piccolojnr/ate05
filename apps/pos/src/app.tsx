@@ -12,6 +12,8 @@ import type {
   PosClient,
   PosOrder,
   PosPrinterConfig,
+  BackupInfo,
+  DatabaseHealth,
 } from "./lib/pos-client";
 import { formatGhs } from "./lib/pos-client";
 import { TablesScreen } from "./screens/tables/tables-screen";
@@ -27,6 +29,10 @@ export function App() {
   const [activeScreen, setActiveScreen] = useState<NavigationItem>("POS");
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(null);
   const [printers, setPrinters] = useState<PosPrinterConfig[]>([]);
+  const [backups, setBackups] = useState<BackupInfo[]>([]);
+  const [databaseHealth, setDatabaseHealth] = useState<DatabaseHealth | null>(
+    null,
+  );
   const [menuManagement, setMenuManagement] =
     useState<MenuManagementData | null>(null);
   const [order, setOrder] = useState<PosOrder | null>(null);
@@ -43,14 +49,19 @@ export function App() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextBootstrap, nextPrinters, nextMenu] = await Promise.all([
-        client.bootstrap(),
-        client.listPrinters(),
-        client.listMenuManagement(),
-      ]);
+      const [nextBootstrap, nextPrinters, nextMenu, nextBackups, nextHealth] =
+        await Promise.all([
+          client.bootstrap(),
+          client.listPrinters(),
+          client.listMenuManagement(),
+          client.listBackups(),
+          client.databaseHealth(),
+        ]);
       setBootstrap(nextBootstrap);
       setPrinters(nextPrinters);
       setMenuManagement(nextMenu);
+      setBackups(nextBackups);
+      setDatabaseHealth(nextHealth);
     } catch (cause) {
       notify.error(
         cause instanceof Error
@@ -275,6 +286,33 @@ export function App() {
   async function testPrinter(printerId: string) {
     await client.testPrinter(printerId);
   }
+  async function backupNow() {
+    try {
+      const created = await client.backupNow();
+      setBackups(await client.listBackups());
+      notify.success(
+        `Backup created · ${new Date(created.createdAt * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`,
+      );
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to create backup.",
+      );
+      throw cause;
+    }
+  }
+  async function restoreBackup(fileName: string) {
+    try {
+      await client.restoreBackup(fileName);
+      setOrder(null);
+      await refresh();
+      notify.success("Backup restored. Local data has been reloaded.");
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to restore backup.",
+      );
+      throw cause;
+    }
+  }
   async function retryPendingPrints() {
     const updatedOrders = await client.retryPendingKitchenPrints();
     const current = updatedOrders.find((entry) => entry.id === order?.id);
@@ -424,6 +462,10 @@ export function App() {
             onTestPrinter={testPrinter}
             onRetryPrints={retryPendingPrints}
             onRetryReceiptPrints={retryPendingReceiptPrints}
+            backups={backups}
+            databaseHealth={databaseHealth}
+            onBackupNow={backupNow}
+            onRestoreBackup={restoreBackup}
           />
         )}
       </div>

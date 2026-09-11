@@ -6,6 +6,8 @@ import type {
   MenuManagementData,
   MenuManagementItem,
   PosBootstrap,
+  BackupInfo,
+  DatabaseHealth,
   PosClient,
   PosOrder,
   PosPayment,
@@ -847,6 +849,22 @@ export function createBrowserPreviewClient(): PosClient {
         entry.id === order.id ? order : entry,
       );
       writeState(state);
+    },
+    async listBackups(): Promise<BackupInfo[]> {
+      return [];
+    },
+    async backupNow(): Promise<BackupInfo> {
+      throw new Error("Backups are available in the native desktop app only.");
+    },
+    async databaseHealth(): Promise<DatabaseHealth> {
+      return {
+        healthy: true,
+        schemaVersion: 0,
+        message: "Browser preview does not use the production SQLite database.",
+      };
+    },
+    async restoreBackup(): Promise<BackupInfo> {
+      throw new Error("Restore is available in the native desktop app only.");
     },
     async listInventory() {
       return readState().inventory.map(refreshInventory);

@@ -7,6 +7,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
+mod backup;
 mod database;
 
 #[derive(Debug, Deserialize)]
@@ -348,15 +349,104 @@ fn main() {
                 Ok::<_, Box<dyn std::error::Error>>(())
             })?;
             let data_dir = app.path().app_data_dir()?;
-            fs::create_dir_all(data_dir.join("backups"))?;
-            fs::create_dir_all(data_dir.join("logs"))?;
+            let backups_dir = data_dir.join("backups");
+            if let Err(error) = fs::create_dir_all(&backups_dir) {
+                eprintln!(
+                    "[ATE05] automatic backup warning: backup folder is unavailable ({error})"
+                );
+            } else {
+                let automatic_result = tauri::async_runtime::block_on(async {
+                    let instances = app.state::<tauri_plugin_sql::DbInstances>();
+                    let pool = {
+                        let lock = instances.0.read().await;
+                        match lock.get("sqlite:ate05.db") {
+                            Some(tauri_plugin_sql::DbPool::Sqlite(pool)) => pool.clone(),
+                            _ => return Err("database pool is unavailable".to_string()),
+                        }
+                    };
+                    backup::ensure_daily(&pool, &backups_dir).await
+                });
+                if let Err(error) = automatic_result {
+                    eprintln!("[ATE05] automatic backup warning: {error}");
+                }
+            }
+            if let Err(error) = fs::create_dir_all(data_dir.join("logs")) {
+                eprintln!("[ATE05] local logging warning: log folder is unavailable ({error})");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             print_kitchen_ticket,
             print_receipt,
-            test_printer
+            test_printer,
+            list_backups,
+            backup_now,
+            database_health,
+            restore_backup
         ])
         .run(tauri::generate_context!())
         .expect("error while running ATE05 POS");
+}
+
+fn native_paths(
+    app: &tauri::AppHandle,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let database_path = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("database_path: {error}"))?
+        .join("ate05.db");
+    let backups_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("backup_path: {error}"))?
+        .join("backups");
+    Ok((database_path, backups_dir))
+}
+
+async fn native_pool(app: &tauri::AppHandle) -> Result<sqlx::SqlitePool, String> {
+    let instances = app.state::<tauri_plugin_sql::DbInstances>();
+    let lock = instances.0.read().await;
+    match lock.get("sqlite:ate05.db") {
+        Some(tauri_plugin_sql::DbPool::Sqlite(pool)) => Ok(pool.clone()),
+        _ => Err("database_unavailable: local database is unavailable".into()),
+    }
+}
+
+#[tauri::command]
+async fn list_backups(app: tauri::AppHandle) -> Result<Vec<backup::BackupInfo>, String> {
+    let (_, backups_dir) = native_paths(&app)?;
+    backup::list(&backups_dir).await
+}
+
+#[tauri::command]
+async fn backup_now(app: tauri::AppHandle) -> Result<backup::BackupInfo, String> {
+    let pool = native_pool(&app).await?;
+    let (_, backups_dir) = native_paths(&app)?;
+    backup::create(&pool, &backups_dir, "manual").await
+}
+
+#[tauri::command]
+async fn database_health(app: tauri::AppHandle) -> Result<backup::DatabaseHealth, String> {
+    let pool = native_pool(&app).await?;
+    Ok(backup::health(&pool).await)
+}
+
+#[tauri::command]
+async fn restore_backup(
+    app: tauri::AppHandle,
+    file_name: String,
+) -> Result<backup::BackupInfo, String> {
+    let pool = native_pool(&app).await?;
+    let (database_path, backups_dir) = native_paths(&app)?;
+    let (new_pool, info) = backup::restore(pool, &database_path, &backups_dir, &file_name).await?;
+    let instances = app.state::<tauri_plugin_sql::DbInstances>();
+    let previous = instances.0.write().await.insert(
+        "sqlite:ate05.db".into(),
+        tauri_plugin_sql::DbPool::Sqlite(new_pool),
+    );
+    if let Some(tauri_plugin_sql::DbPool::Sqlite(pool)) = previous {
+        pool.close().await;
+    }
+    Ok(info)
 }

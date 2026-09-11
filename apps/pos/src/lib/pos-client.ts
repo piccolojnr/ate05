@@ -139,6 +139,21 @@ export interface KitchenTicket {
 
 export type PosPrinterConfig = PrinterConfig;
 
+export interface BackupInfo {
+  fileName: string;
+  kind: "automatic" | "manual" | "pre_restore";
+  createdAt: number;
+  schemaVersion: number;
+  sizeBytes: number;
+  valid: boolean;
+}
+
+export interface DatabaseHealth {
+  healthy: boolean;
+  schemaVersion: number;
+  message: string;
+}
+
 export interface PosBootstrap {
   businessId: string;
   createdBy: string;
@@ -236,6 +251,10 @@ export interface PosClient {
   listReceipts(): Promise<PosReceipt[]>;
   retryPendingReceiptPrints(): Promise<PosOrder[]>;
   reprintReceipt(orderId: string): Promise<void>;
+  listBackups(): Promise<BackupInfo[]>;
+  backupNow(): Promise<BackupInfo>;
+  databaseHealth(): Promise<DatabaseHealth>;
+  restoreBackup(fileName: string): Promise<BackupInfo>;
   listInventory(): Promise<InventoryItem[]>;
   getInventoryItem(itemId: string): Promise<InventoryItem>;
   listStockMovements(itemId: string): Promise<StockMovement[]>;

@@ -3,7 +3,11 @@ import { Badge, Button, Card, Checkbox, Input, Select } from "@ate05/ui";
 import { PageHeader } from "../../components/page-header";
 import { StatusBadge } from "../../components/status-badge";
 import { isTauriRuntime } from "../../lib/get-pos-client";
-import type { PosPrinterConfig } from "../../lib/pos-client";
+import type {
+  BackupInfo,
+  DatabaseHealth,
+  PosPrinterConfig,
+} from "../../lib/pos-client";
 
 type PrinterRole = "kitchen" | "receipt";
 type TestState = "idle" | "printing" | "success" | "failed";
@@ -230,6 +234,10 @@ export function SettingsScreen({
   onTestPrinter,
   onRetryPrints,
   onRetryReceiptPrints,
+  backups,
+  databaseHealth,
+  onBackupNow,
+  onRestoreBackup,
 }: {
   printers: PosPrinterConfig[];
   onSavePrinter: (
@@ -238,7 +246,46 @@ export function SettingsScreen({
   onTestPrinter: (printerId: string) => Promise<void>;
   onRetryPrints: () => Promise<void>;
   onRetryReceiptPrints: () => Promise<void>;
+  backups: BackupInfo[];
+  databaseHealth: DatabaseHealth | null;
+  onBackupNow: () => Promise<void>;
+  onRestoreBackup: (fileName: string) => Promise<void>;
 }) {
+  const [backupState, setBackupState] = useState<"idle" | "working">("idle");
+  const [selectedBackup, setSelectedBackup] = useState("");
+  const [confirmRestore, setConfirmRestore] = useState(false);
+  const native = isTauriRuntime(window);
+  const latestAutomatic = backups.find((backup) => backup.kind === "automatic");
+  const latestManual = backups.find((backup) => backup.kind === "manual");
+  const formatBackupDate = (backup?: BackupInfo) =>
+    backup
+      ? new Date(backup.createdAt * 1000).toLocaleString([], {
+          dateStyle: "medium",
+          timeStyle: "short",
+        })
+      : "Not created yet";
+
+  async function createBackup() {
+    setBackupState("working");
+    try {
+      await onBackupNow();
+    } finally {
+      setBackupState("idle");
+    }
+  }
+
+  async function restore() {
+    if (!selectedBackup) return;
+    setBackupState("working");
+    try {
+      await onRestoreBackup(selectedBackup);
+      setSelectedBackup("");
+      setConfirmRestore(false);
+    } finally {
+      setBackupState("idle");
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-col gap-5">
       <PageHeader
@@ -284,6 +331,114 @@ export function SettingsScreen({
             Retry receipt prints
           </Button>
         </div>
+      </Card>
+      <Card className="p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-primary">
+              Data &amp; backup
+            </p>
+            <h2 className="mt-1 text-lg font-black">
+              Protect local restaurant data
+            </h2>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Daily backups are kept on this computer. Before restoring, ATE05
+              creates a safety copy of the current database.
+            </p>
+          </div>
+          <Badge
+            tone={
+              native
+                ? databaseHealth?.healthy
+                  ? "success"
+                  : "warning"
+                : "neutral"
+            }
+          >
+            {native
+              ? databaseHealth?.healthy
+                ? "Database healthy"
+                : "Health check unavailable"
+              : "Browser preview"}
+          </Badge>
+        </div>
+        <div className="mt-5 grid gap-3 border-y py-4 text-sm sm:grid-cols-2">
+          <div>
+            <p className="text-muted-foreground">Last automatic backup</p>
+            <p className="mt-1 font-semibold">
+              {formatBackupDate(latestAutomatic)}
+            </p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Last manual backup</p>
+            <p className="mt-1 font-semibold">
+              {formatBackupDate(latestManual)}
+            </p>
+          </div>
+        </div>
+        {!native ? (
+          <p className="mt-4 rounded-md bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+            Backup and restore are available in the native desktop app. Browser
+            preview uses simulated local state and does not create SQLite files.
+          </p>
+        ) : null}
+        <div className="mt-5 flex flex-wrap items-end gap-3">
+          <Button
+            disabled={!native || backupState === "working"}
+            onClick={() => void createBackup()}
+          >
+            {backupState === "working" ? "Working…" : "Back Up Now"}
+          </Button>
+          {native && backups.length ? (
+            <label className="min-w-64 text-sm font-semibold">
+              Restore from backup
+              <Select
+                aria-label="Restore from backup"
+                className="mt-1 min-h-11 font-normal"
+                value={selectedBackup}
+                onChange={(event) => {
+                  setSelectedBackup(event.target.value);
+                  setConfirmRestore(false);
+                }}
+              >
+                <option value="">Choose a validated backup</option>
+                {backups.map((backup) => (
+                  <option key={backup.fileName} value={backup.fileName}>
+                    {backup.kind.replace("_", " ")} · {formatBackupDate(backup)}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          ) : null}
+          {native && selectedBackup && !confirmRestore ? (
+            <Button variant="secondary" onClick={() => setConfirmRestore(true)}>
+              Restore selected backup
+            </Button>
+          ) : null}
+        </div>
+        {confirmRestore ? (
+          <div className="mt-4 rounded-md border border-warning/30 bg-warning/10 p-4">
+            <p className="font-bold">Replace current local data?</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              A safety backup will be created first. The selected backup will
+              replace the current database and the application data will reload.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => setConfirmRestore(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={backupState === "working"}
+                onClick={() => void restore()}
+              >
+                {backupState === "working" ? "Restoring…" : "Confirm restore"}
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </Card>
       <Card className="p-5">
         <p className="text-xs font-bold uppercase tracking-wider text-primary">

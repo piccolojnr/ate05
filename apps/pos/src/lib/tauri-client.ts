@@ -10,6 +10,8 @@ import {
 } from "@ate05/domain";
 import type {
   KitchenTicket,
+  BackupInfo,
+  DatabaseHealth,
   OrderType,
   PosBootstrap,
   InventoryItem,
@@ -1735,6 +1737,34 @@ export function createTauriClient(): PosClient {
         await getActiveReceiptPrinter(db),
         true,
       );
+    },
+    async listBackups() {
+      try {
+        return await invoke<BackupInfo[]>("list_backups");
+      } catch (cause) {
+        throw new PosClientError("database", String(cause));
+      }
+    },
+    async backupNow() {
+      try {
+        return await invoke<BackupInfo>("backup_now");
+      } catch (cause) {
+        throw new PosClientError("database", String(cause));
+      }
+    },
+    async databaseHealth() {
+      try {
+        return await invoke<DatabaseHealth>("database_health");
+      } catch (cause) {
+        throw new PosClientError("database", String(cause));
+      }
+    },
+    async restoreBackup(fileName) {
+      try {
+        return await invoke<BackupInfo>("restore_backup", { fileName });
+      } catch (cause) {
+        throw new PosClientError("database", String(cause));
+      }
     },
     async listInventory() {
       return listInventoryRows(await database());
