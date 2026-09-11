@@ -30,4 +30,28 @@ describe("POS client capability boundary", () => {
   it("keeps the browser preview composed from the same capability contracts", () => {
     expectClientCapabilities(createBrowserPreviewClient());
   });
+
+  it("persists only the remembered browser staff identity", async () => {
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        localStorage: {
+          getItem: (key: string) => values.get(key) ?? null,
+          setItem: (key: string, value: string) => values.set(key, value),
+          removeItem: (key: string) => values.delete(key),
+        },
+      },
+    });
+    const client = createBrowserPreviewClient();
+
+    await client.rememberStaff("preview-cashier");
+
+    expect(await client.getRememberedStaffId()).toBe("preview-cashier");
+    expect([...values.values()]).toEqual(["preview-cashier"]);
+    expect([...values.values()].join(" ")).not.toContain("1357");
+
+    await client.forgetRememberedStaff();
+    expect(await client.getRememberedStaffId()).toBeNull();
+  });
 });

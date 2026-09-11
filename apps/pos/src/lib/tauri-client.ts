@@ -1036,7 +1036,7 @@ export function createTauriClient(): PosClient {
       } catch (cause) {
         const detail = String(cause);
         throw new PosClientError(
-          "validation",
+          detail.includes("inactive") ? "inactive_staff" : "invalid_pin",
           detail.includes("inactive")
             ? "This account is inactive."
             : "Incorrect PIN.",
@@ -1053,6 +1053,19 @@ export function createTauriClient(): PosClient {
     async lockSession() {
       await invoke("lock_session");
       currentUser = null;
+    },
+    async getRememberedStaffId() {
+      try {
+        return await invoke<string | null>("remembered_staff_id");
+      } catch {
+        return null;
+      }
+    },
+    async rememberStaff(userId) {
+      await invoke("remember_staff", { staffId: userId });
+    },
+    async forgetRememberedStaff() {
+      await invoke("forget_remembered_staff");
     },
     async listStaff() {
       try {

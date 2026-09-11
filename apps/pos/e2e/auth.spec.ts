@@ -7,18 +7,19 @@ test("preview starts locked, rejects an incorrect PIN, and allows user switching
   await expect(
     page.getByRole("heading", { name: "Sign in to continue" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: /ATE05 Owner/ }).click();
   await page.getByLabel("Staff PIN").fill("0000");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("alert")).toContainText("Incorrect PIN");
+  await page.getByRole("button", { name: "Back to staff selection" }).click();
+  await page.getByRole("button", { name: /Preview Cashier/ }).click();
   await page.getByLabel("Staff PIN").fill("1357");
-  await page
-    .getByRole("combobox", { name: "Staff member" })
-    .selectOption("preview-cashier");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByLabel("Current order")).toBeVisible();
   await expect(page.getByRole("button", { name: "Settings" })).toHaveCount(0);
   await page.getByRole("button", { name: "Lock" }).click();
   await expect(
-    page.getByRole("heading", { name: "Sign in to continue" }),
+    page.getByRole("heading", { name: "Welcome back" }),
   ).toBeVisible();
+  await expect(page.getByText("Preview Cashier").first()).toBeVisible();
 });

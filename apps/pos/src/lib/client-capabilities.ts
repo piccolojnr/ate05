@@ -89,6 +89,9 @@ export interface SessionClient {
   authenticateUser(userId: string, pin: string): Promise<SessionUser>;
   currentSession(): Promise<SessionUser | null>;
   lockSession(): Promise<void>;
+  getRememberedStaffId(): Promise<string | null>;
+  rememberStaff(userId: string): Promise<void>;
+  forgetRememberedStaff(): Promise<void>;
   listStaff(): Promise<AuthUser[]>;
   createStaff(name: string, role: string, pin: string): Promise<AuthUser>;
   updateStaff(input: StaffUpdateInput): Promise<void>;

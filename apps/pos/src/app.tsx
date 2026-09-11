@@ -36,6 +36,9 @@ export function App() {
   );
   const [session, setSession] = useState<SessionUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [rememberedStaffId, setRememberedStaffId] = useState<string | null>(
+    null,
+  );
   const [activeScreen, setActiveScreen] = useState<NavigationItem>("POS");
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(null);
   const [printers, setPrinters] = useState<PosPrinterConfig[]>([]);
@@ -128,10 +131,24 @@ export function App() {
     }
   }
   useEffect(() => {
-    void Promise.all([client.authBootstrap(), client.currentSession()])
-      .then(([nextAuth, current]) => {
+    void Promise.all([
+      client.authBootstrap(),
+      client.currentSession(),
+      client.getRememberedStaffId(),
+    ])
+      .then(async ([nextAuth, current, remembered]) => {
+        const validRemembered =
+          remembered &&
+          nextAuth.users.some(
+            (user) => user.id === remembered && user.active && user.hasPin,
+          )
+            ? remembered
+            : null;
+        if (remembered && !validRemembered)
+          await client.forgetRememberedStaff();
         setAuthBootstrap(nextAuth);
         setSession(current);
+        setRememberedStaffId(validRemembered);
       })
       .catch((cause) =>
         notify.error(
@@ -168,6 +185,12 @@ export function App() {
   }
   async function signIn(userId: string, pin: string) {
     const next = await client.authenticateUser(userId, pin);
+    try {
+      await client.rememberStaff(userId);
+      setRememberedStaffId(userId);
+    } catch {
+      // Remembering identity is a convenience and must never block sign-in.
+    }
     setSession(next);
     setActiveScreen("POS");
     return next;
@@ -596,6 +619,11 @@ export function App() {
     return (
       <AuthScreen
         bootstrap={authBootstrap}
+        rememberedStaffId={rememberedStaffId}
+        onForgetRemembered={async () => {
+          await client.forgetRememberedStaff();
+          setRememberedStaffId(null);
+        }}
         onLogin={signIn}
         onSetupPin={setupOwnerPin}
       />

@@ -10,6 +10,7 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 mod auth;
 mod backup;
 mod database;
+mod device;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -441,7 +442,10 @@ fn main() {
             auth::lock_session,
             auth::list_staff,
             auth::create_staff,
-            auth::update_staff
+            auth::update_staff,
+            device::remembered_staff_id,
+            device::remember_staff,
+            device::forget_remembered_staff
         ])
         .run(tauri::generate_context!())
         .expect("error while running ATE05 POS");

@@ -1,9 +1,13 @@
 import { expect, test } from "@playwright/test";
 
 async function signIn(page: import("@playwright/test").Page) {
+  if (!(await page.getByLabel("Staff PIN").count())) {
+    const owner = page.getByRole("button", { name: /ATE05 Owner/ });
+    if (await owner.count()) await owner.click();
+  }
   if (await page.getByLabel("Staff PIN").count()) {
     await page.getByLabel("Staff PIN").fill("2468");
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: /Sign in|Unlock/ }).click();
     await expect(page.getByLabel("Current order")).toBeVisible();
   }
 }

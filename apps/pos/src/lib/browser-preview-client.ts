@@ -20,10 +20,12 @@ import type {
 } from "./pos-client";
 import type { PaperWidth } from "@ate05/printing";
 import { calculateKitchenDeltas, type KitchenSyncLine } from "@ate05/domain";
+import { PosClientError } from "./client-errors";
 
 const storageKey = "ate05-pos-browser-preview-v1";
 const businessId = "00000000-0000-4000-8000-000000000001";
 const createdBy = "00000000-0000-4000-8000-000000000002";
+const rememberedStaffKey = "ate05-pos-browser-remembered-staff-v1";
 
 interface PreviewState {
   nextOrderNumber: number;
@@ -329,7 +331,9 @@ export function createBrowserPreviewClient(): PosClient {
         user &&
         ((user.role === "owner" && pin === ownerPin) ||
           (user.role === "cashier" && pin === "1357"));
-      if (!valid) throw new Error("Incorrect PIN.");
+      if (!user?.active)
+        throw new PosClientError("inactive_staff", "This account is inactive.");
+      if (!valid) throw new PosClientError("invalid_pin", "Incorrect PIN.");
       session = {
         id: user.id,
         businessId,
@@ -344,6 +348,27 @@ export function createBrowserPreviewClient(): PosClient {
     },
     async lockSession() {
       session = null;
+    },
+    async getRememberedStaffId() {
+      try {
+        return window.localStorage.getItem(rememberedStaffKey);
+      } catch {
+        return null;
+      }
+    },
+    async rememberStaff(userId) {
+      try {
+        window.localStorage.setItem(rememberedStaffKey, userId);
+      } catch {
+        // Remembering identity is a convenience; authentication remains valid.
+      }
+    },
+    async forgetRememberedStaff() {
+      try {
+        window.localStorage.removeItem(rememberedStaffKey);
+      } catch {
+        // Corrupt/unavailable preview storage is treated as empty.
+      }
     },
     async listStaff() {
       if (!session?.permissions.includes("staff"))
