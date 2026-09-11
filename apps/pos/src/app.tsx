@@ -59,6 +59,14 @@ export function App() {
     () => order?.items.reduce((total, line) => total + line.quantity, 0) ?? 0,
     [order],
   );
+  const pendingPrints = useMemo(
+    () =>
+      (order?.kitchenTickets.filter(
+        (ticket) => ticket.printStatus !== "printed",
+      ).length ?? 0) +
+      (order?.receipt && order.receipt.printStatus !== "printed" ? 1 : 0),
+    [order],
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -480,7 +488,7 @@ export function App() {
   }
   const content =
     activeScreen === "POS" ? (
-      <div className="flex min-h-0 flex-1 gap-6">
+      <div className="flex min-h-0 flex-1 gap-4">
         <MenuCatalog
           category={category}
           onCategoryChange={setCategory}
@@ -634,9 +642,13 @@ export function App() {
       onNavigate={setActiveScreen}
       session={session}
       onLock={() => void lock()}
+      businessName={authBootstrap.businessName}
+      databaseHealthy={databaseHealth?.healthy ?? true}
+      pendingPrints={pendingPrints}
+      canOpenSettings={session.permissions.includes("settings")}
     >
       <div
-        className={`min-h-0 flex-1 ${activeScreen === "POS" ? "flex flex-col overflow-hidden p-6" : "overflow-auto p-8"}`}
+        className={`min-h-0 flex-1 ${activeScreen === "POS" ? "flex flex-col overflow-hidden p-4 xl:p-6" : "overflow-auto p-8"}`}
       >
         <div className="mb-3 flex items-center gap-2 lg:hidden">
           <Badge tone="primary">{itemCount} items in current order</Badge>

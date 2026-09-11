@@ -16,24 +16,20 @@ export function Sidebar({
   active,
   onNavigate,
   session,
-  onLock,
 }: {
   active: NavigationItem;
   onNavigate: (item: NavigationItem) => void;
   session: SessionUser;
-  onLock: () => void;
 }) {
   const allowed = new Set(session.permissions);
   return (
     <aside
-      className="flex h-full w-[260px] shrink-0 flex-col border-r border-nav-border bg-nav p-4 text-nav-foreground max-lg:w-[76px] max-lg:px-3"
+      className="flex h-full w-[196px] shrink-0 flex-col border-r border-nav-border bg-nav p-3 text-nav-foreground"
       aria-label="Primary navigation"
     >
       <div className="mb-4 border-b border-nav-border px-2 pb-4">
         <span className="text-lg font-black tracking-tight">ATE 05</span>
-        <p className="mt-1 text-xs text-nav-muted max-lg:hidden">
-          Restaurant Management
-        </p>
+        <p className="mt-1 text-xs text-nav-muted">Restaurant POS</p>
       </div>
       <nav className="space-y-1">
         {navigationItems
@@ -44,29 +40,24 @@ export function Sidebar({
               type="button"
               onClick={() => onNavigate(item)}
               aria-current={active === item ? "page" : undefined}
+              aria-label={item}
+              title={item}
               className={cn(
-                "flex min-h-11 w-full items-center gap-3 rounded-md border px-3 text-left text-sm font-semibold transition-colors",
+                "flex min-h-11 w-full items-center gap-3 rounded-md border px-3 text-left text-sm font-semibold transition-colors active:translate-y-px",
                 active === item
                   ? "border-nav-active bg-nav-active text-nav-active-foreground"
                   : "border-transparent text-nav-muted hover:bg-nav-hover hover:text-nav-foreground",
               )}
             >
               <Icon name={icons[item]} />
-              <span className="max-lg:hidden">{item}</span>
+              <span>{item === "POS" ? "Sell" : item}</span>
             </button>
           ))}
       </nav>
-      <div className="mt-auto rounded-md border border-nav-border bg-nav-hover p-3 max-lg:hidden">
-        <p className="text-xs">{session.role}</p>
-        <p className="mt-1 flex justify-between text-xs">
+      <div className="mt-auto rounded-md border border-nav-border bg-nav-hover p-3">
+        <p className="text-xs capitalize text-nav-muted">{session.role}</p>
+        <p className="mt-1 truncate text-xs">
           <strong>{session.name}</strong>
-          <button
-            type="button"
-            className="text-nav-muted underline-offset-2 hover:underline"
-            onClick={onLock}
-          >
-            Lock
-          </button>
         </p>
       </div>
     </aside>

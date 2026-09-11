@@ -43,7 +43,20 @@ test("action errors dismiss automatically and can be paused or dismissed", async
   await expect(error).toHaveCount(0);
 });
 
+test("menu search supports the documented keyboard shortcut", async ({
+  page,
+}) => {
+  const search = page.getByLabel("Search menu");
+  await page.keyboard.press("Control+K");
+  await expect(search).toBeFocused();
+  await search.fill("Fried");
+  await page.keyboard.press("Escape");
+  await expect(search).toHaveValue("");
+});
+
 for (const [width, height] of [
+  [1024, 768],
+  [1280, 720],
   [1366, 768],
   [1440, 900],
   [1920, 1080],

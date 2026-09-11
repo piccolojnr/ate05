@@ -307,7 +307,7 @@ export function OrderPanel({
   const kitchenPending = Boolean(order?.kitchenChangesPending);
   return (
     <aside
-      className="flex min-h-0 w-[36%] min-w-[410px] max-w-[520px] shrink-0 flex-col overflow-hidden rounded-lg border bg-card shadow-card max-lg:hidden"
+      className="flex min-h-0 w-[39%] min-w-[360px] max-w-[520px] shrink-0 flex-col overflow-hidden rounded-lg border bg-card shadow-card"
       aria-label="Current order"
     >
       <div className="shrink-0 border-b p-4">

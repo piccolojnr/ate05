@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, cn, Input } from "@ate05/ui";
 import { Icon } from "./icons";
 import {
@@ -54,7 +54,7 @@ function MenuItemTile({
 }) {
   return (
     <button
-      className="group flex min-h-[142px] flex-col rounded-md border bg-card p-3 text-left shadow-none transition-colors hover:border-primary/50 hover:bg-primary/[0.03] active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      className="group flex min-h-[132px] flex-col rounded-md border bg-card p-3 text-left shadow-none transition-colors hover:border-primary/50 hover:bg-primary/[0.03] active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       type="button"
       onClick={() => onAdd(item.id)}
       aria-label={`Add ${item.name}`}
@@ -108,6 +108,32 @@ export function MenuCatalog({
   orderNumber?: number;
 }) {
   const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    function handleShortcut(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const typing = target?.matches(
+        "input, textarea, select, [contenteditable='true']",
+      );
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        if (typing && target !== searchRef.current) return;
+        event.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+      if (
+        event.key === "Escape" &&
+        query &&
+        (!typing || target === searchRef.current)
+      ) {
+        event.preventDefault();
+        setQuery("");
+        searchRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [query]);
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return items.filter((item) => {
@@ -232,12 +258,27 @@ export function MenuCatalog({
               className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
             />
             <Input
+              ref={searchRef}
               aria-label="Search menu"
+              aria-keyshortcuts="Control+K Meta+K"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              className="min-h-10 pl-9"
+              className="min-h-10 pl-9 pr-10"
               placeholder="Search menu"
             />
+            {query ? (
+              <button
+                type="button"
+                aria-label="Clear menu search"
+                onClick={() => {
+                  setQuery("");
+                  searchRef.current?.focus();
+                }}
+                className="absolute right-1 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                ×
+              </button>
+            ) : null}
           </label>
         </div>
         <div
