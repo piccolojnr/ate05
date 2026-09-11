@@ -1,6 +1,10 @@
-# Native runtime validation — Phase 10E
+# Native runtime validation — Phase 10E.1
 
 Validation date: 11 Sep 2026
+
+Phase 10E.1 was a follow-up native GUI sign-off attempt. The required full
+interactive workflow was not completed, so this document intentionally does
+not claim native GUI sign-off.
 
 ## Environment
 
@@ -10,11 +14,13 @@ Validation date: 11 Sep 2026
 - Node: 24.19.0
 - pnpm: 12.3.4
 - Native launch: `pnpm --filter @ate05/pos tauri dev`
-- Validation profile: isolated XDG config/data directories under
-  `/tmp/ate05-native-validation`
+- Isolated sign-off profile: `/tmp/ate05-native-signoff`
+- Disposable native build target: `/tmp/ate05-native-target`
+- Temporary dev URL: `http://127.0.0.1:1421`; the environment reported port
+  1420 as occupied without a reachable listener
 
 The isolated profile prevented the validation run from touching any existing
-ATE05 user database.
+ATE05 user database. No production or normal development database was used.
 
 ## Native paths
 
@@ -27,70 +33,71 @@ $XDG_CONFIG_HOME/com.ate05.pos/ate05.db
 $XDG_DATA_HOME/com.ate05.pos/backups/
 ```
 
-When XDG variables are not overridden, the platform resolves those locations to
-the user's normal configuration/data directories. Packaged builds use the same
-identifier and platform directory strategy; the isolated development run used
-the disposable paths above.
+When XDG variables are not overridden, those locations resolve to the user's
+normal configuration/data directories. Packaged builds use the same identifier
+and platform directory strategy.
 
-## Scenarios performed
+## Results
 
-### Launch and database startup
+### Native launch and startup health
 
-The real Tauri process launched successfully. Vite started on `127.0.0.1:1420`,
+The real Tauri process launched successfully during Phase 10E. Vite started,
 Rust compiled, and `target/debug/ate05-pos` opened a native 1200×800 window. No
-blank screen or startup panic was observed. The native profile created:
+blank screen or startup panic was observed. The native profile created the
+SQLite database, WAL support files, and a validated automatic startup backup.
 
-- `ate05.db`
-- WAL shared-memory files
-- an automatic backup under the native app-data backup directory
+The database reported migration version 4, `PRAGMA integrity_check` returned
+`ok`, and `PRAGMA foreign_key_check` returned no rows. The fresh profile showed
+the lock/owner PIN setup screen consistently on launch and relaunch.
 
-The isolated database reported migration version 4, `PRAGMA integrity_check`
-returned `ok`, and `PRAGMA foreign_key_check` returned no rows.
+### Phase 10E.1 GUI sign-off
 
-The first-run lock screen rendered the owner PIN setup flow. A second launch
-reached the same screen at the configured window size. Automated interaction
-with the GUI timed out before completing the first-run form, so the full login
-and post-login workflow is not marked complete here.
+Desktop automation reached the fresh first-run setup state, but the automation
+window expired before the owner PIN form could be completed. Consequently the
+following required native GUI scenarios remain unverified:
 
-### Native data and backup validation
+- owner PIN setup, sign-in, manual lock, and user switching
+- menu item creation/use in POS
+- table creation, occupancy, duplicate-order protection, and turnover
+- order persistence and kitchen ticket failure/retry across restart
+- payment, receipt creation, receipt print failure/retry across restart
+- explicit order completion and table release
+- inventory receive/issue and attributed movement history
+- GUI manual backup and disposable restore
+- native Settings permission checks
 
-The native startup path created the expected app-config and app-data directories,
-ran migrations, and created a validated automatic backup. The backup file was
-present and the database remained healthy after startup. Manual backup, restore,
-and retention were validated by the native Rust backup tests using real temporary
-SQLite files, but were not driven through the GUI in this run.
+Application, database, Rust-native, and browser-preview tests remain useful
+automated evidence, but they are not a substitute for this native GUI run.
 
-### Operational workflows
+### Backup and recovery
 
-The following were not fully completed interactively in the native window during
-this validation run: staff login/user switching, order persistence across a GUI
-restart, table turnover, payment/receipt flow, inventory mutations, printer
-failure/retry, and Settings permissions. Their correctness remains covered by
-the application/native/database automated tests and browser workflows, but that
-is not a substitute for completing the native GUI scenarios.
+Native startup backup creation and database health were observed in the prior
+isolated validation run. Manual backup, restore, and retention correctness are
+covered by native Rust tests using real temporary SQLite files, but the GUI
+backup/restore workflow was not completed in Phase 10E.1.
 
 ### Printing
 
-No physical ESC/POS printer was available. Physical printer validation not
-performed. Native TCP formatting/error behavior is covered by Rust tests and the
-configured 5-second transport timeout. A local TCP sink was not used in this
-run.
+Physical printer validation not performed. Native TCP formatter and error
+behavior are covered by Rust tests with a configured five-second transport
+timeout. A local TCP sink was not used in this run.
 
 ## Bugs discovered and fixed
 
-No reproducible native runtime bug was discovered during the launch and startup
-validation. No production behavior was changed as a result of the manual GUI
-attempt.
+No reproducible product bug was discovered during native launch/startup checks,
+and no production behavior was changed. The validation environment reported
+port 1420 as occupied without a reachable listener; a temporary 1421 dev URL
+was used. A stale Cargo target lock was avoided with the disposable target
+directory.
 
-## Known limitations and next validation steps
+## Remaining validation and release blockers
 
-- Complete an interactive native owner PIN setup and normal login.
-- Exercise order/table/payment/receipt/inventory persistence through the native
-  GUI, including a close and relaunch.
-- Exercise failed KOT and receipt printing, then retry after relaunch.
-- Perform GUI-driven manual backup and disposable restore verification.
+- Complete the interactive native owner setup and login.
+- Exercise the full dine-in, kitchen failure/retry, payment/receipt, inventory,
+  turnover, restart, and GUI backup/restore workflows.
 - Validate with a real network ESC/POS printer before restaurant deployment.
 - Verify packaged installers and signing on each target operating system.
+- Provide an operational off-device backup/export process.
 
 Browser preview remains a separate development adapter and was not treated as
 native evidence.
