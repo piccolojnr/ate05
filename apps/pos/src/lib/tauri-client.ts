@@ -2089,6 +2089,20 @@ export function createTauriClient(): PosClient {
       }
       return orders;
     },
+    async retryReceiptPrint(orderId) {
+      const db = await database();
+      const order = await getOrder(db, orderId);
+      if (!order.receipt)
+        throw new PosClientError("not_found", "Receipt not found.");
+      await attemptReceiptPrint(
+        db,
+        order.receipt,
+        order,
+        await getActiveReceiptPrinter(db),
+        false,
+        "retry",
+      );
+    },
     async reprintReceipt(orderId) {
       const db = await database();
       const order = await getOrder(db, orderId);

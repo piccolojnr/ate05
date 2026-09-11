@@ -52,12 +52,11 @@ test("cashier can create, persist, and reopen a local order", async ({
   await expect(page.getByLabel("Current order")).toContainText(
     "GHS 135.00 due",
   );
+  await page.getByRole("button", { name: "Take Payment" }).click();
   await page.getByRole("button", { name: "Confirm Payment" }).click();
-  await expect(page.getByLabel("Current order")).toContainText("PAID");
-  await expect(page.getByLabel("Current order")).toContainText(
-    "Receipt #000001",
-  );
-  await page.getByRole("button", { name: "Reprint Receipt" }).click();
+  await expect(page.getByLabel("Checkout")).toContainText("Payment recorded");
+  await expect(page.getByLabel("Checkout")).toContainText("#000001");
+  await page.getByRole("button", { name: "Reprint receipt" }).click();
   await expect(
     page
       .getByRole("region", { name: /Notifications/ })
@@ -100,6 +99,7 @@ test("operator can turn over a table through explicit order completion", async (
   await page.getByRole("button", { name: "Tables" }).click();
   await expect(page.getByText("Active order at this table")).toBeVisible();
   await page.getByRole("button", { name: "Open Order" }).click();
+  await page.getByRole("button", { name: "Take Payment" }).click();
   await page.getByRole("button", { name: "Confirm Payment" }).click();
   await page.getByRole("button", { name: "Tables" }).click();
   await expect(page.getByText("Active order at this table")).toBeVisible();

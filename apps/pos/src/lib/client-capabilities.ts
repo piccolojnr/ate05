@@ -210,6 +210,7 @@ export interface PrintingClient {
   listPrinters(): Promise<PosPrinterConfig[]>;
   savePrinter(input: PrinterInput): Promise<PosPrinterConfig>;
   testPrinter(printerId: string): Promise<void>;
+  retryReceiptPrint(orderId: string): Promise<void>;
   retryPendingReceiptPrints(): Promise<PosOrder[]>;
   reprintReceipt(orderId: string): Promise<void>;
 }

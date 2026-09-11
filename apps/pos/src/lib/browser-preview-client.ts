@@ -988,6 +988,21 @@ export function createBrowserPreviewClient(): PosClient {
         (entry) => entry.receipt?.printStatus !== "printed",
       );
     },
+    async retryReceiptPrint(orderId) {
+      const state = readState();
+      const order = state.orders.find((entry) => entry.id === orderId);
+      if (!order?.receipt) throw new Error("Receipt not found.");
+      order.receipt = {
+        ...order.receipt,
+        printStatus: "printed",
+        printedAt: new Date().toISOString(),
+        lastPrintError: null,
+      };
+      state.orders = state.orders.map((entry) =>
+        entry.id === order.id ? order : entry,
+      );
+      writeState(state);
+    },
     async reprintReceipt(orderId) {
       const state = readState();
       const order = state.orders.find((entry) => entry.id === orderId);

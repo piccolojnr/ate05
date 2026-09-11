@@ -4,6 +4,7 @@ import { notify } from "./lib/notifications";
 import { AppShell } from "./components/app-shell";
 import { MenuCatalog } from "./components/menu-catalog";
 import { OrderPanel } from "./components/order-panel";
+import { CheckoutWorkspace } from "./components/checkout-workspace";
 import { type NavigationItem } from "./data";
 import { getPosClient } from "./lib/get-pos-client";
 import type {
@@ -50,6 +51,7 @@ export function App() {
   const [menuManagement, setMenuManagement] =
     useState<MenuManagementData | null>(null);
   const [order, setOrder] = useState<PosOrder | null>(null);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [category, setCategory] = useState("All");
   const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
   const [tableId, setTableId] = useState<string | null>(null);
@@ -207,6 +209,7 @@ export function App() {
     await client.lockSession();
     setSession(null);
     setOrder(null);
+    setCheckoutOpen(false);
   }
   useEffect(() => {
     if (!session) return;
@@ -308,7 +311,7 @@ export function App() {
   }
   async function recordPayment(
     input: Parameters<PosClient["recordPayment"]>[0],
-  ) {
+  ): Promise<PosOrder> {
     try {
       const updated = await client.recordPayment(input);
       setOrder(updated);
@@ -321,11 +324,28 @@ export function App() {
           : "Payment recorded. Remaining balance: " +
               formatGhs(updated.amountDueMinor),
       );
+      return updated;
     } catch (cause) {
       notify.error(
         cause instanceof Error ? cause.message : "Unable to record payment.",
       );
+      try {
+        setOrder(await client.getOrder(input.orderId));
+      } catch {
+        // Keep the original payment error when reconciliation is unavailable.
+      }
+      throw cause;
     }
+  }
+  async function retryReceiptPrint() {
+    if (!order) return;
+    await client.retryReceiptPrint(order.id);
+    const updated = await client.getOrder(order.id);
+    setOrder(updated);
+    await refresh();
+    if (updated.receipt?.printStatus === "printed")
+      notify.success("Receipt printed.");
+    else notify.warning("Receipt is still waiting to print.");
   }
   async function reprintReceipt() {
     if (!order) return;
@@ -344,6 +364,7 @@ export function App() {
       setOrder(await client.getOrder(summary.id));
       setOrderType(summary.orderType);
       setTableId(summary.tableId);
+      setCheckoutOpen(false);
       setActiveScreen("POS");
     } catch (cause) {
       notify.error(
@@ -353,6 +374,7 @@ export function App() {
   }
   function startTableOrder(tableId: string) {
     setOrder(null);
+    setCheckoutOpen(false);
     setOrderType("dine_in");
     setTableId(tableId);
     setCategory("All");
@@ -384,6 +406,7 @@ export function App() {
   }
   function startNewOrder() {
     setOrder(null);
+    setCheckoutOpen(false);
     setOrderType("dine_in");
     setTableId(null);
     setCategory("All");
@@ -488,37 +511,49 @@ export function App() {
   }
   const content =
     activeScreen === "POS" ? (
-      <div className="flex min-h-0 flex-1 gap-4">
-        <MenuCatalog
-          category={category}
-          onCategoryChange={setCategory}
-          onAdd={addItem}
-          categories={bootstrap?.categories ?? []}
-          items={bootstrap?.items ?? []}
-          orderType={order?.orderType ?? orderType}
-          onOrderTypeChange={(type) => {
-            if (!order) {
-              setOrderType(type);
-              setTableId(null);
-            }
-          }}
-          tableId={order?.tableId ?? tableId}
-          tables={bootstrap?.tables ?? []}
-          onTableChange={setTableId}
-          orderNumber={order?.orderNumber}
-        />
-        <OrderPanel
+      checkoutOpen && order ? (
+        <CheckoutWorkspace
           order={order}
-          onQuantityChange={changeQuantity}
-          onNoteChange={changeNote}
-          onSendToKitchen={sendToKitchen}
-          sendingToKitchen={sendingToKitchen}
-          onReprintTicket={(ticketId) => void reprintTicket(ticketId)}
+          businessName={authBootstrap?.businessName || "ATE05"}
+          cashierName={session?.name ?? ""}
+          onBack={() => setCheckoutOpen(false)}
           onRecordPayment={recordPayment}
+          onRetryReceiptPrint={retryReceiptPrint}
           onReprintReceipt={reprintReceipt}
           onCompleteOrder={completeCurrentOrder}
         />
-      </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 gap-4">
+          <MenuCatalog
+            category={category}
+            onCategoryChange={setCategory}
+            onAdd={addItem}
+            categories={bootstrap?.categories ?? []}
+            items={bootstrap?.items ?? []}
+            orderType={order?.orderType ?? orderType}
+            onOrderTypeChange={(type) => {
+              if (!order) {
+                setOrderType(type);
+                setTableId(null);
+              }
+            }}
+            tableId={order?.tableId ?? tableId}
+            tables={bootstrap?.tables ?? []}
+            onTableChange={setTableId}
+            orderNumber={order?.orderNumber}
+          />
+          <OrderPanel
+            order={order}
+            onQuantityChange={changeQuantity}
+            onNoteChange={changeNote}
+            onSendToKitchen={sendToKitchen}
+            sendingToKitchen={sendingToKitchen}
+            onReprintTicket={(ticketId) => void reprintTicket(ticketId)}
+            onOpenCheckout={() => setCheckoutOpen(true)}
+            onCompleteOrder={completeCurrentOrder}
+          />
+        </div>
+      )
     ) : (
       <div className="mx-auto max-w-6xl">
         {activeScreen === "Orders" && (

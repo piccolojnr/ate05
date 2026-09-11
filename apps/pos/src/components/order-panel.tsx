@@ -1,159 +1,7 @@
-import { useState } from "react";
 import { Badge, Button, Card, Input } from "@ate05/ui";
 import { Icon } from "./icons";
 import { StatusBadge } from "./status-badge";
-import {
-  formatGhs,
-  type PaymentMethod,
-  type PosClient,
-  type PosOrder,
-} from "../lib/pos-client";
-
-function PaymentPanel({
-  order,
-  onRecordPayment,
-  onReprintReceipt,
-}: {
-  order: PosOrder;
-  onRecordPayment: (input: {
-    orderId: string;
-    method: PaymentMethod;
-    amountMinor: number;
-    cashTenderedMinor?: number | null;
-    reference?: string | null;
-    idempotencyKey: string;
-  }) => Promise<void>;
-  onReprintReceipt: () => Promise<void>;
-}) {
-  const [method, setMethod] = useState<PaymentMethod>("cash");
-  const [amount, setAmount] = useState(String(order.amountDueMinor / 100));
-  const [tendered, setTendered] = useState("");
-  const [reference, setReference] = useState("");
-  const [busy, setBusy] = useState(false);
-  const amountMinor = Math.round(Number(amount || 0) * 100);
-  const tenderedMinor = Math.round(Number(tendered || amount || 0) * 100);
-  const changeMinor =
-    method === "cash" ? Math.max(0, tenderedMinor - amountMinor) : 0;
-  async function submit() {
-    setBusy(true);
-    try {
-      await onRecordPayment({
-        orderId: order.id,
-        method,
-        amountMinor,
-        cashTenderedMinor: method === "cash" ? tenderedMinor : null,
-        reference: reference || null,
-        idempotencyKey: crypto.randomUUID(),
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="rounded-md border bg-muted/30 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-            Take payment
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Add a payment or settle the balance.
-          </p>
-        </div>
-        <span className="shrink-0 tabular-nums text-sm font-black">
-          {formatGhs(order.amountDueMinor)} due
-        </span>
-      </div>
-      <div className="mt-3 grid grid-cols-4 gap-1">
-        {(["cash", "mobile_money", "card", "other"] as PaymentMethod[]).map(
-          (entry) => (
-            <Button
-              key={entry}
-              size="sm"
-              variant={method === entry ? "primary" : "secondary"}
-              onClick={() => setMethod(entry)}
-            >
-              {entry === "mobile_money"
-                ? "MoMo"
-                : entry[0]!.toUpperCase() + entry.slice(1)}
-            </Button>
-          ),
-        )}
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <label className="block text-xs font-semibold">
-          Amount
-          <Input
-            aria-label="Payment amount"
-            value={amount}
-            onChange={(event) => setAmount(event.target.value)}
-            type="number"
-            min="0.01"
-            step="0.01"
-            className="mt-1 min-h-10"
-          />
-        </label>
-        {method === "cash" ? (
-          <label className="block text-xs font-semibold">
-            Cash tendered
-            <Input
-              value={tendered}
-              onChange={(event) => setTendered(event.target.value)}
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder={amount}
-              className="mt-1 min-h-10"
-            />
-          </label>
-        ) : (
-          <label className="block text-xs font-semibold">
-            Reference
-            <Input
-              value={reference}
-              onChange={(event) => setReference(event.target.value)}
-              placeholder="Optional"
-              className="mt-1 min-h-10"
-            />
-          </label>
-        )}
-      </div>
-      {method === "cash" ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Change:{" "}
-          <strong className="text-foreground">{formatGhs(changeMinor)}</strong>
-        </p>
-      ) : null}
-      <Button
-        className="mt-3 w-full"
-        disabled={
-          busy ||
-          amountMinor <= 0 ||
-          amountMinor > order.amountDueMinor ||
-          (method === "cash" && tenderedMinor < amountMinor)
-        }
-        onClick={() => void submit()}
-      >
-        {busy ? "Saving…" : "Confirm Payment"}
-      </Button>
-      {order.receipt ? (
-        <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-          <span className="truncate text-muted-foreground">
-            Receipt #{String(order.receipt.receiptNumber).padStart(6, "0")} ·{" "}
-            {order.receipt.printStatus}
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void onReprintReceipt()}
-          >
-            Reprint Receipt
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
+import { formatGhs, type PosOrder } from "../lib/pos-client";
 
 function QuantityControl({
   name,
@@ -256,6 +104,14 @@ function OrderTotals({ order }: { order: PosOrder | null }) {
           {formatGhs(order?.totalMinor ?? 0)}
         </span>
       </div>
+      {order && order.amountDueMinor > 0 ? (
+        <div className="flex justify-between pt-1 font-bold text-primary">
+          <span>Amount due</span>
+          <span className="tabular-nums">
+            {formatGhs(order.amountDueMinor)} due
+          </span>
+        </div>
+      ) : null}
       {order && order.amountPaidMinor > 0 ? (
         <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
           <div className="flex justify-between text-muted-foreground">
@@ -283,8 +139,7 @@ export function OrderPanel({
   onSendToKitchen,
   sendingToKitchen,
   onReprintTicket,
-  onRecordPayment,
-  onReprintReceipt,
+  onOpenCheckout,
   onCompleteOrder,
 }: {
   order: PosOrder | null;
@@ -293,10 +148,7 @@ export function OrderPanel({
   onSendToKitchen: () => void;
   sendingToKitchen: boolean;
   onReprintTicket: (ticketId: string) => void;
-  onRecordPayment: (
-    input: Parameters<PosClient["recordPayment"]>[0],
-  ) => Promise<void>;
-  onReprintReceipt: () => Promise<void>;
+  onOpenCheckout: () => void;
   onCompleteOrder: () => Promise<void>;
 }) {
   const items = order?.items ?? [];
@@ -375,25 +227,15 @@ export function OrderPanel({
             onNoteChange={(notes) => onNoteChange(line.id, notes)}
           />
         ))}
-        {order && order.amountDueMinor > 0 ? (
-          <PaymentPanel
-            order={order}
-            onRecordPayment={onRecordPayment}
-            onReprintReceipt={onReprintReceipt}
-          />
-        ) : order?.receipt ? (
+        {order?.receipt ? (
           <div className="rounded-md border bg-success/10 p-3 text-sm">
             <div className="flex items-center justify-between gap-2 font-bold">
               <span>
                 PAID · Receipt #
                 {String(order.receipt.receiptNumber).padStart(6, "0")}
               </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => void onReprintReceipt()}
-              >
-                Reprint Receipt
+              <Button size="sm" variant="ghost" onClick={onOpenCheckout}>
+                View receipt
               </Button>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -474,16 +316,10 @@ export function OrderPanel({
           </Button>
           <Button
             className="w-full"
-            disabled={!order || order.amountDueMinor <= 0}
-            onClick={() =>
-              document
-                .querySelector<HTMLInputElement>(
-                  'input[aria-label="Payment amount"]',
-                )
-                ?.focus()
-            }
+            disabled={!order || (order.amountDueMinor <= 0 && !order.receipt)}
+            onClick={onOpenCheckout}
           >
-            {order?.paymentStatus === "paid" ? "Paid" : "Take Payment"}
+            {order?.paymentStatus === "paid" ? "View receipt" : "Take Payment"}
             {order?.paymentStatus !== "paid" ? (
               <Icon name="arrow" width="17" height="17" />
             ) : null}
