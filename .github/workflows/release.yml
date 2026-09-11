@@ -69,7 +69,14 @@ jobs:
           args: ${{ matrix.args }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('ATE05 POS {0}', github.ref_name) || '' }}
-          releaseBody: "Download the installer for your operating system below. macOS builds are currently unsigned."
+          releaseBody: |
+            ## Install ATE05 POS
+
+            Download the file for your operating system and CPU, install it normally, and launch ATE05 POS. A fresh installation opens the restaurant setup wizard; it does not ask configuration questions in the OS installer.
+
+            Start by setting the owner PIN, choose an editable starter menu if useful, add initial tables, and configure printers later in Settings. Keep an exported backup on separate storage.
+
+            macOS and Windows artifacts require platform security approval until production signing credentials are configured.
           releaseDraft: true
           prerelease: false
           generateReleaseNotes: true

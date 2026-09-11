@@ -1,6 +1,7 @@
 import Database from "@tauri-apps/plugin-sql";
 import { serializeClient } from "./serialize-client";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import {
   calculateKitchenDeltas,
   calculateOrderTotals,
@@ -995,6 +996,36 @@ export function createTauriClient(): PosClient {
     async setupOwnerPin(userId, pin) {
       try {
         await invoke("setup_owner_pin", { userId, pin });
+      } catch (cause) {
+        throw new PosClientError(
+          "validation",
+          String(cause).replace(/^.*?: /, ""),
+        );
+      }
+    },
+    async saveSetupProgress(input) {
+      try {
+        await invoke("save_setup_progress", {
+          step: input.step,
+          businessName: input.businessName,
+          ownerName: input.ownerName,
+          starterPack: input.starterPack,
+          tableCount: input.tableCount,
+        });
+      } catch (cause) {
+        throw new PosClientError("database", String(cause));
+      }
+    },
+    async completeFirstRunSetup(input) {
+      try {
+        await invoke("complete_first_run_setup", {
+          businessName: input.businessName,
+          ownerUserId: input.ownerUserId,
+          ownerName: input.ownerName,
+          ownerPin: input.ownerPin,
+          starterPack: input.starterPack,
+          tableCount: input.tableCount,
+        });
       } catch (cause) {
         throw new PosClientError(
           "validation",
@@ -2077,6 +2108,20 @@ export function createTauriClient(): PosClient {
       requirePermission("backup");
       try {
         return await invoke<BackupInfo>("backup_now");
+      } catch (cause) {
+        throw new PosClientError("database", String(cause));
+      }
+    },
+    async exportBackup() {
+      requirePermission("backup");
+      const destination = await save({
+        title: "Export ATE05 backup",
+        defaultPath: `ate05-backup-${new Date().toISOString().replace(/[:]/g, "-").slice(0, 16)}.sqlite`,
+        filters: [{ name: "SQLite backup", extensions: ["sqlite"] }],
+      });
+      if (!destination) return null;
+      try {
+        return await invoke<string>("export_backup", { destination });
       } catch (cause) {
         throw new PosClientError("database", String(cause));
       }

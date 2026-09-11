@@ -29,6 +29,13 @@
       "when": 1789126766497,
       "tag": "0003_classy_thundra",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789200000000,
+      "tag": "0004_setup_state",
+      "breakpoints": true
     }
   ]
 }

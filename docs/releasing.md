@@ -4,7 +4,10 @@ ATE05 desktop installers are built by GitHub Actions from version tags.
 
 ## Create a release
 
-Update the application version in `apps/pos/src-tauri/tauri.conf.json` and `apps/pos/src-tauri/Cargo.toml`, commit the change, then create and push a matching tag:
+Update the application version in `package.json`, `apps/pos/package.json`,
+`apps/pos/src-tauri/tauri.conf.json`, and `apps/pos/src-tauri/Cargo.toml`, commit
+the change, then create and push a matching tag. These four files are kept in
+sync for the current release process:
 
 ```bash
 git tag v0.1.0
@@ -19,6 +22,10 @@ The `Release desktop apps` workflow builds four targets in parallel:
 - macOS Apple Silicon: DMG/app bundle
 
 The workflow creates a draft GitHub Release and uploads the generated bundles to it. Review the assets and publish the draft when they are ready for testers. Manual workflow dispatch is available for build testing; manual runs upload workflow artifacts without creating a release.
+
+The release page includes operator-oriented first-launch instructions. The OS
+installer only installs ATE05; restaurant initialization happens in the
+cross-platform first-run wizard.
 
 ## Signing status
 

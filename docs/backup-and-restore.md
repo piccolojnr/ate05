@@ -14,7 +14,7 @@ On native application startup, ATE05 attempts at most one automatic backup per U
 
 Settings → Data & Backup → Back Up Now creates and validates a manual SQLite snapshot. The UI shows the local database health and the most recent automatic/manual backup. Browser preview clearly reports that it does not create production SQLite files.
 
-External file export and opening the platform backup folder are deferred until a native file-dialog capability is added. The current local backup operation is still useful for recovery on the same machine; production operations should additionally copy the application-data backup folder using the operating system’s normal backup process.
+Export Backup now uses the native file dialog to write a validated snapshot to a user-selected `.sqlite` destination. The renderer cannot write arbitrary files or copy the live database. The current local backup operation remains useful for same-machine recovery; production operations should additionally keep exported backups on removable or otherwise separate storage.
 
 ## Restore procedure
 

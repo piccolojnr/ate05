@@ -26,6 +26,7 @@ import { SettingsScreen } from "./screens/settings/settings-screen";
 import type { MenuManagementData } from "./lib/pos-client";
 import { OrdersScreen } from "./screens/orders/orders-screen";
 import { AuthScreen } from "./screens/auth-screen";
+import { FirstRunSetupScreen } from "./screens/first-run-setup-screen";
 
 const client = getPosClient();
 
@@ -148,6 +149,21 @@ export function App() {
   }, [refresh, session]);
   async function setupOwnerPin(userId: string, pin: string) {
     await client.setupOwnerPin(userId, pin);
+    setAuthBootstrap(await client.authBootstrap());
+  }
+  async function completeFirstRunSetup(
+    input: Parameters<PosClient["completeFirstRunSetup"]>[0],
+  ) {
+    await client.completeFirstRunSetup(input);
+    const nextAuth = await client.authBootstrap();
+    setAuthBootstrap(nextAuth);
+    await signIn(input.ownerUserId, input.ownerPin);
+    notify.success("Setup complete. Welcome to ATE05.");
+  }
+  async function saveSetupProgress(
+    input: Parameters<PosClient["saveSetupProgress"]>[0],
+  ) {
+    await client.saveSetupProgress(input);
     setAuthBootstrap(await client.authBootstrap());
   }
   async function signIn(userId: string, pin: string) {
@@ -376,6 +392,18 @@ export function App() {
       throw cause;
     }
   }
+  async function exportBackup() {
+    try {
+      const path = await client.exportBackup();
+      if (path) notify.success("Backup exported successfully.");
+      return path;
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to export backup.",
+      );
+      throw cause;
+    }
+  }
   async function restoreBackup(fileName: string) {
     try {
       await client.restoreBackup(fileName);
@@ -541,6 +569,7 @@ export function App() {
             backups={backups}
             databaseHealth={databaseHealth}
             onBackupNow={backupNow}
+            onExportBackup={exportBackup}
             onRestoreBackup={restoreBackup}
             staff={staff}
             onCreateStaff={createStaff}
@@ -554,6 +583,14 @@ export function App() {
       <main className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">
         Loading ATE05…
       </main>
+    );
+  if (!session && authBootstrap.setupRequired)
+    return (
+      <FirstRunSetupScreen
+        bootstrap={authBootstrap}
+        onProgress={saveSetupProgress}
+        onComplete={completeFirstRunSetup}
+      />
     );
   if (!session)
     return (

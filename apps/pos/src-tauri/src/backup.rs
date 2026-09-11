@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
 const AUTOMATIC_RETENTION: usize = 14;
 const EXPECTED_TABLES: [&str; 16] = [
     "businesses",
@@ -248,6 +248,28 @@ pub async fn create(
     }
 }
 
+pub async fn export(pool: &SqlitePool, destination: &Path) -> Result<(), String> {
+    if destination.extension().and_then(|value| value.to_str()) != Some("sqlite") {
+        return Err("validation: choose a destination ending in .sqlite".into());
+    }
+    if destination.exists() {
+        return Err("backup_failed: a backup with that name already exists".into());
+    }
+    let temporary = destination.with_extension("sqlite.tmp");
+    if temporary.exists() {
+        fs::remove_file(&temporary)
+            .map_err(|error| format!("backup_failed: could not prepare export ({error})"))?;
+    }
+    vacuum_into(pool, &temporary).await?;
+    if validate(&temporary).await.is_err() {
+        let _ = fs::remove_file(&temporary);
+        return Err("backup_failed: exported backup failed validation".into());
+    }
+    fs::rename(&temporary, destination)
+        .map_err(|error| format!("backup_failed: could not write exported backup ({error})"))?;
+    Ok(())
+}
+
 pub async fn list(backups_dir: &Path) -> Result<Vec<BackupInfo>, String> {
     if !backups_dir.exists() {
         return Ok(Vec::new());
@@ -385,7 +407,7 @@ mod tests {
                 .await
                 .unwrap();
             assert!(info.valid);
-            assert_eq!(info.schema_version, 4);
+            assert_eq!(info.schema_version, 5);
             let backup_path = root.join("backups").join(info.file_name);
             let backup_pool = database::connect(&backup_path).await.unwrap();
             let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM businesses")

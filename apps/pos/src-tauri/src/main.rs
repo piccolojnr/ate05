@@ -361,10 +361,19 @@ fn main() {
                             ),
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 5,
+                            description: "first_run_setup_state",
+                            sql: include_str!(
+                                "../../../../packages/database/drizzle/0004_setup_state.sql"
+                            ),
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),
         )
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Migrations have completed in the SQL plugin's preload setup.
             // Keep every statement of renderer-managed transactions on one connection.
@@ -422,8 +431,11 @@ fn main() {
             backup_now,
             database_health,
             restore_backup,
+            export_backup,
             auth::auth_bootstrap,
             auth::setup_owner_pin,
+            auth::complete_first_run_setup,
+            auth::save_setup_progress,
             auth::authenticate_user,
             auth::current_session,
             auth::lock_session,
@@ -498,6 +510,15 @@ async fn restore_backup(
         pool.close().await;
     }
     Ok(info)
+}
+
+#[tauri::command]
+async fn export_backup(app: tauri::AppHandle, destination: String) -> Result<String, String> {
+    auth::require_permission(&app, "backup")?;
+    let pool = native_pool(&app).await?;
+    let destination = std::path::PathBuf::from(destination);
+    backup::export(&pool, &destination).await?;
+    Ok(destination.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

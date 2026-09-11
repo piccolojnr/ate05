@@ -165,6 +165,13 @@ export interface AuthUser {
 export interface AuthBootstrap {
   users: AuthUser[];
   requiresOwnerPin: boolean;
+  setupRequired: boolean;
+  businessName: string;
+  setupStep: number;
+  setupBusinessName: string | null;
+  setupOwnerName: string | null;
+  setupStarterPack: string | null;
+  setupTableCount: number | null;
 }
 
 export interface SessionUser {
@@ -188,6 +195,21 @@ export interface PosBootstrap {
 export interface PosClient {
   authBootstrap(): Promise<AuthBootstrap>;
   setupOwnerPin(userId: string, pin: string): Promise<void>;
+  saveSetupProgress(input: {
+    step: number;
+    businessName: string;
+    ownerName: string;
+    starterPack: string;
+    tableCount: number;
+  }): Promise<void>;
+  completeFirstRunSetup(input: {
+    businessName: string;
+    ownerUserId: string;
+    ownerName: string;
+    ownerPin: string;
+    starterPack: "empty" | "ghanaian" | "fast_food" | "drinks_snacks";
+    tableCount: number;
+  }): Promise<void>;
   authenticateUser(userId: string, pin: string): Promise<SessionUser>;
   currentSession(): Promise<SessionUser | null>;
   lockSession(): Promise<void>;
@@ -288,6 +310,7 @@ export interface PosClient {
   reprintReceipt(orderId: string): Promise<void>;
   listBackups(): Promise<BackupInfo[]>;
   backupNow(): Promise<BackupInfo>;
+  exportBackup(): Promise<string | null>;
   databaseHealth(): Promise<DatabaseHealth>;
   restoreBackup(fileName: string): Promise<BackupInfo>;
   listInventory(): Promise<InventoryItem[]>;

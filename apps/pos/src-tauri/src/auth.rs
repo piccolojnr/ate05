@@ -35,6 +35,13 @@ pub struct AuthUser {
 pub struct AuthBootstrap {
     pub users: Vec<AuthUser>,
     pub requires_owner_pin: bool,
+    pub setup_required: bool,
+    pub business_name: String,
+    pub setup_step: i64,
+    pub setup_business_name: Option<String>,
+    pub setup_owner_name: Option<String>,
+    pub setup_starter_pack: Option<String>,
+    pub setup_table_count: Option<i64>,
 }
 
 pub fn permissions(role: &str) -> Vec<String> {
@@ -99,6 +106,15 @@ fn valid_pin(pin: &str) -> bool {
     (4..=6).contains(&pin.len()) && pin.chars().all(|character| character.is_ascii_digit())
 }
 
+async fn metadata_value(database: &SqlitePool, key: &str) -> Option<String> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM app_metadata WHERE key = $1")
+        .bind(key)
+        .fetch_optional(database)
+        .await
+        .ok()
+        .flatten()
+}
+
 #[tauri::command]
 pub async fn auth_bootstrap(app: tauri::AppHandle) -> Result<AuthBootstrap, String> {
     let database = pool(&app).await?;
@@ -126,6 +142,26 @@ pub async fn auth_bootstrap(app: tauri::AppHandle) -> Result<AuthBootstrap, Stri
     let requires_owner_pin = rows
         .iter()
         .any(|(_, _, role, active, pin)| role == "owner" && *active == 1 && pin.is_none());
+    let business_name: String = sqlx::query_scalar("SELECT name FROM businesses WHERE id = $1")
+        .bind("00000000-0000-4000-8000-000000000001")
+        .fetch_one(&database)
+        .await
+        .map_err(|_| "database: business details could not be loaded".to_string())?;
+    let setup_status: String =
+        sqlx::query_scalar("SELECT value FROM app_metadata WHERE key = 'setup_status'")
+            .fetch_one(&database)
+            .await
+            .unwrap_or_else(|_| "completed".into());
+    let setup_step = metadata_value(&database, "setup_step")
+        .await
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let setup_business_name = metadata_value(&database, "setup_business_name").await;
+    let setup_owner_name = metadata_value(&database, "setup_owner_name").await;
+    let setup_starter_pack = metadata_value(&database, "setup_starter_pack").await;
+    let setup_table_count = metadata_value(&database, "setup_table_count")
+        .await
+        .and_then(|value| value.parse().ok());
     Ok(AuthBootstrap {
         users: rows
             .into_iter()
@@ -138,7 +174,183 @@ pub async fn auth_bootstrap(app: tauri::AppHandle) -> Result<AuthBootstrap, Stri
             })
             .collect(),
         requires_owner_pin,
+        setup_required: setup_status != "completed",
+        business_name,
+        setup_step,
+        setup_business_name,
+        setup_owner_name,
+        setup_starter_pack,
+        setup_table_count,
     })
+}
+
+#[tauri::command]
+pub async fn save_setup_progress(
+    app: tauri::AppHandle,
+    step: i64,
+    business_name: String,
+    owner_name: String,
+    starter_pack: String,
+    table_count: i64,
+) -> Result<(), String> {
+    if !(0..=3).contains(&step) || !(0..=100).contains(&table_count) {
+        return Err("validation: setup progress is invalid.".into());
+    }
+    let database = pool(&app).await?;
+    let mut transaction = database
+        .begin()
+        .await
+        .map_err(|_| "database: setup progress could not start".to_string())?;
+    for (key, value) in [
+        ("setup_status", "in_progress".to_string()),
+        ("setup_step", step.to_string()),
+        ("setup_business_name", business_name.trim().to_string()),
+        ("setup_owner_name", owner_name.trim().to_string()),
+        ("setup_starter_pack", starter_pack),
+        ("setup_table_count", table_count.to_string()),
+    ] {
+        sqlx::query("INSERT INTO app_metadata (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+            .bind(key).bind(value).execute(&mut *transaction).await
+            .map_err(|_| "database: setup progress could not be saved".to_string())?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|_| "database: setup progress could not be completed".to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn complete_first_run_setup(
+    app: tauri::AppHandle,
+    business_name: String,
+    owner_user_id: String,
+    owner_name: String,
+    owner_pin: String,
+    starter_pack: String,
+    table_count: u32,
+) -> Result<(), String> {
+    if business_name.trim().is_empty() {
+        return Err("validation: Restaurant name is required.".into());
+    }
+    if owner_name.trim().is_empty() {
+        return Err("validation: Owner name is required.".into());
+    }
+    if !valid_pin(&owner_pin) {
+        return Err("validation: PIN must be 4 to 6 digits.".into());
+    }
+    if table_count > 100 {
+        return Err("validation: Choose between 0 and 100 tables.".into());
+    }
+    if !["empty", "ghanaian", "fast_food", "drinks_snacks"].contains(&starter_pack.as_str()) {
+        return Err("validation: Choose a valid starter menu.".into());
+    }
+    let database = pool(&app).await?;
+    let hash = hash_pin(&owner_pin)?;
+    let business_id = "00000000-0000-4000-8000-000000000001";
+    let timestamp = time_now();
+    let mut transaction = database
+        .begin()
+        .await
+        .map_err(|_| "database: setup could not start".to_string())?;
+    let owner_exists: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = $1 AND business_id = $2 AND role = 'owner' AND active = 1",
+    )
+    .bind(&owner_user_id)
+    .bind(business_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|_| "database: owner account could not be loaded".to_string())?;
+    if owner_exists.is_none() {
+        return Err("validation: Owner account is no longer available.".into());
+    }
+    sqlx::query("UPDATE businesses SET name = $1, updated_at = $2 WHERE id = $3")
+        .bind(business_name.trim())
+        .bind(&timestamp)
+        .bind(business_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| "database: restaurant details could not be saved".to_string())?;
+    sqlx::query("UPDATE users SET name = $1, pin_hash = $2, updated_at = $3 WHERE id = $4 AND business_id = $5")
+        .bind(owner_name.trim())
+        .bind(hash)
+        .bind(&timestamp)
+        .bind(&owner_user_id)
+        .bind(business_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| "database: owner account could not be saved".to_string())?;
+
+    let packs: &[(&str, &str, &[(&str, i64)])] = match starter_pack.as_str() {
+        "ghanaian" => &[
+            (
+                "Main Meals",
+                "main-meals",
+                &[("Fried Rice", 5000), ("Jollof Rice", 5000)],
+            ),
+            (
+                "Local Dishes",
+                "local-dishes",
+                &[("Waakye", 4500), ("Banku with Tilapia", 6500)],
+            ),
+            ("Drinks", "drinks", &[("Bottled Water", 500)]),
+        ],
+        "fast_food" => &[
+            (
+                "Meals",
+                "meals",
+                &[("Chicken Burger", 4500), ("Chicken Wings", 3500)],
+            ),
+            (
+                "Drinks",
+                "drinks",
+                &[("Coke", 1200), ("Bottled Water", 500)],
+            ),
+        ],
+        "drinks_snacks" => &[
+            (
+                "Drinks",
+                "drinks",
+                &[("Coke", 1200), ("Bottled Water", 500)],
+            ),
+            ("Snacks", "snacks", &[("Meat Pie", 1500), ("Chips", 2000)]),
+        ],
+        _ => &[],
+    };
+    for (category_name, category_key, items) in packs {
+        let category_id = format!("setup-category-{category_key}");
+        sqlx::query("INSERT OR IGNORE INTO menu_categories (id, business_id, name, sort_order, active, created_at, updated_at) VALUES ($1, $2, $3, 0, 1, $4, $4)")
+            .bind(&category_id).bind(business_id).bind(category_name).bind(&timestamp)
+            .execute(&mut *transaction).await
+            .map_err(|_| "database: starter menu could not be saved".to_string())?;
+        for (item_name, price) in *items {
+            let item_id = format!(
+                "setup-item-{}-{}",
+                category_key,
+                item_name.to_lowercase().replace(' ', "-")
+            );
+            sqlx::query("INSERT OR IGNORE INTO menu_items (id, business_id, category_id, name, description, selling_price_minor, available, active, created_at, updated_at) VALUES ($1, $2, $3, $4, NULL, $5, 1, 1, $6, $6)")
+                .bind(item_id).bind(business_id).bind(&category_id).bind(item_name).bind(price).bind(&timestamp)
+                .execute(&mut *transaction).await
+                .map_err(|_| "database: starter menu could not be saved".to_string())?;
+        }
+    }
+    for number in 1..=table_count {
+        let name = format!("Table {number}");
+        let id = format!("setup-table-{number}");
+        sqlx::query("INSERT OR IGNORE INTO restaurant_tables (id, business_id, name, capacity, status, active, created_at, updated_at) VALUES ($1, $2, $3, 4, 'available', 1, $4, $4)")
+            .bind(id).bind(business_id).bind(name).bind(&timestamp)
+            .execute(&mut *transaction).await
+            .map_err(|_| "database: tables could not be saved".to_string())?;
+    }
+    sqlx::query("INSERT INTO app_metadata (key, value) VALUES ('setup_status', 'completed') ON CONFLICT(key) DO UPDATE SET value = 'completed'")
+        .execute(&mut *transaction).await
+        .map_err(|_| "database: setup status could not be saved".to_string())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| "database: setup could not be completed".to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

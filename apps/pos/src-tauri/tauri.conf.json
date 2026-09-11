@@ -28,6 +28,11 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "RiTech",
+    "category": "Business",
+    "shortDescription": "Offline-first restaurant point of sale",
+    "longDescription": "ATE05 POS is an offline-first desktop point of sale for restaurant operations.",
+    "copyright": "Copyright © 2026 RiTech",
     "targets": "all",
     "icon": [
       "icons/32x32.png",

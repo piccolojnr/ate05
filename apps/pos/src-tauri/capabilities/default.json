@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Default capability for the POS window.",
   "windows": ["main"],
-  "permissions": ["core:default", "sql:default", "sql:allow-execute"]
+  "permissions": [
+    "core:default",
+    "sql:default",
+    "sql:allow-execute",
+    "dialog:default"
+  ]
 }

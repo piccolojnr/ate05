@@ -372,6 +372,7 @@ export function SettingsScreen({
   backups,
   databaseHealth,
   onBackupNow,
+  onExportBackup,
   onRestoreBackup,
   staff,
   onCreateStaff,
@@ -387,6 +388,7 @@ export function SettingsScreen({
   backups: BackupInfo[];
   databaseHealth: DatabaseHealth | null;
   onBackupNow: () => Promise<void>;
+  onExportBackup: () => Promise<string | null>;
   onRestoreBackup: (fileName: string) => Promise<void>;
   staff: AuthUser[];
   onCreateStaff: (name: string, role: string, pin: string) => Promise<void>;
@@ -540,6 +542,13 @@ export function SettingsScreen({
             onClick={() => void createBackup()}
           >
             {backupState === "working" ? "Working…" : "Back Up Now"}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={!native || backupState === "working"}
+            onClick={() => void onExportBackup()}
+          >
+            Export Backup
           </Button>
           {native && backups.length ? (
             <label className="min-w-64 text-sm font-semibold">

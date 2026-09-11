@@ -72,6 +72,14 @@ impl MigrationSource<'static> for Ate05Migrations {
                         .into(),
                     false,
                 ),
+                Migration::new(
+                    5,
+                    "first_run_setup_state".into(),
+                    MigrationType::ReversibleUp,
+                    include_str!("../../../../packages/database/drizzle/0004_setup_state.sql")
+                        .into(),
+                    false,
+                ),
             ])
         })
     }

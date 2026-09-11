@@ -299,11 +299,29 @@ export function createBrowserPreviewClient(): PosClient {
   }
   return {
     async authBootstrap(): Promise<AuthBootstrap> {
-      return { users: previewUsers, requiresOwnerPin: false };
+      return {
+        users: previewUsers,
+        requiresOwnerPin: false,
+        setupRequired: false,
+        businessName: "ATE05",
+        setupStep: 0,
+        setupBusinessName: null,
+        setupOwnerName: null,
+        setupStarterPack: null,
+        setupTableCount: null,
+      };
     },
     async setupOwnerPin(_userId, pin) {
       if (!/^\d{4,6}$/.test(pin)) throw new Error("PIN must be 4 to 6 digits.");
       ownerPin = pin;
+    },
+    async saveSetupProgress() {},
+    async completeFirstRunSetup(input) {
+      if (!input.businessName.trim())
+        throw new Error("Restaurant name is required.");
+      if (!/^\d{4,6}$/.test(input.ownerPin))
+        throw new Error("PIN must be 4 to 6 digits.");
+      ownerPin = input.ownerPin;
     },
     async authenticateUser(userId, pin) {
       const user = previewUsers.find((entry) => entry.id === userId);
@@ -966,6 +984,12 @@ export function createBrowserPreviewClient(): PosClient {
     async backupNow(): Promise<BackupInfo> {
       requirePermission("backup");
       throw new Error("Backups are available in the native desktop app only.");
+    },
+    async exportBackup(): Promise<string | null> {
+      requirePermission("backup");
+      throw new Error(
+        "Backup export is available in the native desktop app only.",
+      );
     },
     async databaseHealth(): Promise<DatabaseHealth> {
       return {
