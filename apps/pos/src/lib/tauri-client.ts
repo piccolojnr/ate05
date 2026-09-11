@@ -222,6 +222,55 @@ async function execute(
   }
 }
 
+async function nextBusinessSequence(
+  db: SqlDatabase,
+  key: string,
+  table: "orders" | "receipts",
+  column: "order_number" | "receipt_number",
+  scopedBusinessId: string,
+): Promise<number> {
+  await execute(
+    db,
+    `INSERT OR IGNORE INTO app_metadata (key, value) SELECT $1, CAST(COALESCE(MAX(${column}), 0) AS TEXT) FROM ${table} WHERE business_id = $2`,
+    [key, scopedBusinessId],
+  );
+  await execute(
+    db,
+    "UPDATE app_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = $1",
+    [key],
+  );
+  const [row] = await select<Row>(
+    db,
+    "SELECT CAST(value AS INTEGER) AS sequence FROM app_metadata WHERE key = $1",
+    [key],
+  );
+  return asNumber(row?.sequence);
+}
+
+async function nextKitchenSequence(
+  db: SqlDatabase,
+  orderId: string,
+  scopedBusinessId: string,
+): Promise<number> {
+  const key = `kitchen:${orderId}`;
+  await execute(
+    db,
+    "INSERT OR IGNORE INTO app_metadata (key, value) SELECT $1, CAST(COALESCE(MAX(sequence), 0) AS TEXT) FROM kitchen_tickets WHERE order_id = $2 AND business_id = $3",
+    [key, orderId, scopedBusinessId],
+  );
+  await execute(
+    db,
+    "UPDATE app_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = $1",
+    [key],
+  );
+  const [row] = await select<Row>(
+    db,
+    "SELECT CAST(value AS INTEGER) AS sequence FROM app_metadata WHERE key = $1",
+    [key],
+  );
+  return asNumber(row?.sequence);
+}
+
 async function ensureBootstrap(db: SqlDatabase): Promise<void> {
   const now = timestamp();
   await execute(
@@ -1287,10 +1336,12 @@ export function createTauriClient(): PosClient {
                 "This table already has an active order.",
               );
           }
-          const [next] = await select<Row>(
+          const nextNumber = await nextBusinessSequence(
             db,
-            "SELECT COALESCE(MAX(order_number), 0) + 1 AS nextNumber FROM orders WHERE business_id = $1",
-            [businessId],
+            `order:${businessId}`,
+            "orders",
+            "order_number",
+            businessId,
           );
           orderId = crypto.randomUUID();
           const now = timestamp();
@@ -1300,7 +1351,7 @@ export function createTauriClient(): PosClient {
             [
               orderId,
               businessId,
-              asNumber(next?.nextNumber),
+              nextNumber,
               input.orderType,
               input.tableId ?? null,
               actorId(),
@@ -1470,12 +1521,7 @@ export function createTauriClient(): PosClient {
           await execute(db, "COMMIT");
           return getOrder(db, orderId);
         }
-        const [sequenceRow] = await select<Row>(
-          db,
-          "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM kitchen_tickets WHERE order_id = $1",
-          [orderId],
-        );
-        let sequence = asNumber(sequenceRow?.sequence) || 1;
+        let sequence = await nextKitchenSequence(db, orderId, businessId);
         const newTicketIds: string[] = [];
         for (const delta of deltas) {
           const ticketId = crypto.randomUUID();
@@ -1731,10 +1777,12 @@ export function createTauriClient(): PosClient {
             [input.orderId, businessId],
           );
           if (!existingReceipt) {
-            const [numberRow] = await select<Row>(
+            const nextNumber = await nextBusinessSequence(
               db,
-              "SELECT COALESCE(MAX(receipt_number), 0) + 1 AS nextNumber FROM receipts WHERE business_id = $1",
-              [businessId],
+              `receipt:${businessId}`,
+              "receipts",
+              "receipt_number",
+              businessId,
             );
             const itemRows = await select<Row>(
               db,
@@ -1765,7 +1813,7 @@ export function createTauriClient(): PosClient {
                 crypto.randomUUID(),
                 businessId,
                 input.orderId,
-                asNumber(numberRow?.nextNumber),
+                nextNumber,
                 asNumber(orderRow.totalMinor),
                 JSON.stringify(
                   snapshot.payments.map((payment) => ({

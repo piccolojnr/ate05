@@ -167,6 +167,58 @@ function now(): string {
   return new Date().toISOString();
 }
 
+/** Allocate a sequence while the caller's SQLite write transaction is open. */
+function nextBusinessSequence(
+  sqlite: Database.Database,
+  key: string,
+  table: "orders" | "receipts",
+  column: "order_number" | "receipt_number",
+  businessId: string,
+): number {
+  sqlite
+    .prepare(
+      `INSERT OR IGNORE INTO app_metadata (key, value) SELECT ?, CAST(COALESCE(MAX(${column}), 0) AS TEXT) FROM ${table} WHERE business_id = ?`,
+    )
+    .run(key, businessId);
+  sqlite
+    .prepare(
+      "UPDATE app_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = ?",
+    )
+    .run(key);
+  return (
+    sqlite
+      .prepare(
+        "SELECT CAST(value AS INTEGER) AS value FROM app_metadata WHERE key = ?",
+      )
+      .get(key) as { value: number }
+  ).value;
+}
+
+function nextKitchenSequence(
+  sqlite: Database.Database,
+  orderId: string,
+  businessId: string,
+): number {
+  const key = `kitchen:${orderId}`;
+  sqlite
+    .prepare(
+      "INSERT OR IGNORE INTO app_metadata (key, value) SELECT ?, CAST(COALESCE(MAX(sequence), 0) AS TEXT) FROM kitchen_tickets WHERE order_id = ? AND business_id = ?",
+    )
+    .run(key, orderId, businessId);
+  sqlite
+    .prepare(
+      "UPDATE app_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = ?",
+    )
+    .run(key);
+  return (
+    sqlite
+      .prepare(
+        "SELECT CAST(value AS INTEGER) AS value FROM app_metadata WHERE key = ?",
+      )
+      .get(key) as { value: number }
+  ).value;
+}
+
 function calculateTotals(
   sqlite: Database.Database,
   orderId: string,
@@ -604,11 +656,13 @@ export function createPosService(sqlite: Database.Database) {
         if (activeOrder)
           throw new Error("This table already has an active order.");
       }
-      const next = sqlite
-        .prepare(
-          "SELECT COALESCE(MAX(order_number), 0) + 1 AS nextNumber FROM orders WHERE business_id = ?",
-        )
-        .get(input.businessId) as { nextNumber: number };
+      const nextNumber = nextBusinessSequence(
+        sqlite,
+        `order:${input.businessId}`,
+        "orders",
+        "order_number",
+        input.businessId,
+      );
       sqlite
         .prepare(
           "INSERT INTO orders (id, business_id, order_number, order_type, table_id, created_by, status, payment_status, subtotal_minor, discount_minor, total_minor, opened_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', 'unpaid', 0, 0, 0, ?, ?, ?)",
@@ -616,7 +670,7 @@ export function createPosService(sqlite: Database.Database) {
         .run(
           id,
           input.businessId,
-          next.nextNumber,
+          nextNumber,
           input.orderType,
           input.tableId ?? null,
           input.createdBy,
@@ -1154,18 +1208,17 @@ export function createPosService(sqlite: Database.Database) {
         tickets.length > 0,
       );
       if (deltas.length === 0) return;
-      const next = sqlite
-        .prepare(
-          "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM kitchen_tickets WHERE order_id = ?",
-        )
-        .get(input.orderId) as { sequence: number };
+      let sequence = nextKitchenSequence(
+        sqlite,
+        input.orderId,
+        input.businessId,
+      );
       const insertTicket = sqlite.prepare(
         "INSERT INTO kitchen_tickets (id, business_id, order_id, sequence, type, created_by, print_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
       );
       const insertItem = sqlite.prepare(
         "INSERT INTO kitchen_ticket_items (id, business_id, kitchen_ticket_id, order_item_id, item_name_snapshot, quantity, action, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
-      let sequence = next.sequence;
       for (const delta of deltas) {
         const ticketId = randomUUID();
         const timestamp = now();

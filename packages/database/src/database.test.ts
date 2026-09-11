@@ -253,6 +253,9 @@ describe("ATE05 SQLite database", () => {
   });
 
   it("enforces foreign keys", () => {
+    expect(database.sqlite.pragma("foreign_keys")).toEqual([
+      { foreign_keys: 1 },
+    ]);
     expect(() =>
       database.sqlite
         .prepare(
@@ -260,6 +263,62 @@ describe("ATE05 SQLite database", () => {
         )
         .run(timestamp, timestamp),
     ).toThrow();
+  });
+
+  it("rolls back payment and receipt writes together when receipt creation fails", () => {
+    const orderId = insertOrder("00000000-0000-4000-8000-000000000141");
+    database.sqlite.exec(
+      "CREATE TRIGGER fail_receipt_write AFTER INSERT ON receipts BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END",
+    );
+    expect(() => {
+      database.sqlite.transaction(() => {
+        database.sqlite
+          .prepare(
+            "INSERT INTO payments (id, business_id, order_id, amount_minor, method, status, received_by, received_at, created_at, updated_at) VALUES (?, ?, ?, 10000, 'cash', 'recorded', ?, ?, ?, ?)",
+          )
+          .run(
+            "00000000-0000-4000-8000-000000000142",
+            developmentSeedIds.business,
+            orderId,
+            developmentSeedIds.owner,
+            timestamp,
+            timestamp,
+            timestamp,
+          );
+        database.sqlite
+          .prepare(
+            "UPDATE orders SET payment_status = 'paid' WHERE id = ? AND business_id = ?",
+          )
+          .run(orderId, developmentSeedIds.business);
+        database.sqlite
+          .prepare(
+            "INSERT INTO receipts (id, business_id, receipt_number, order_id, issued_by, issued_at, total_minor, payment_summary, snapshot, created_at) VALUES (?, ?, 381, ?, ?, ?, 10000, '{}', '{}', ?)",
+          )
+          .run(
+            "00000000-0000-4000-8000-000000000143",
+            developmentSeedIds.business,
+            orderId,
+            developmentSeedIds.owner,
+            timestamp,
+            timestamp,
+          );
+      })();
+    }).toThrow("injected receipt failure");
+    expect(
+      database.sqlite
+        .prepare("SELECT COUNT(*) AS count FROM payments WHERE order_id = ?")
+        .get(orderId),
+    ).toEqual({ count: 0 });
+    expect(
+      database.sqlite
+        .prepare("SELECT payment_status FROM orders WHERE id = ?")
+        .get(orderId),
+    ).toEqual({ payment_status: "unpaid" });
+    expect(
+      database.sqlite
+        .prepare("SELECT COUNT(*) AS count FROM receipts WHERE order_id = ?")
+        .get(orderId),
+    ).toEqual({ count: 0 });
   });
 
   it("keeps repository reads scoped to the requested business", () => {

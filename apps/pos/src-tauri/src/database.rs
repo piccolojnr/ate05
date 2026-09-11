@@ -6,7 +6,7 @@ use sqlx::ConnectOptions;
 use std::{path::Path, time::Duration};
 
 pub async fn connect(path: &Path) -> Result<sqlx::SqlitePool, sqlx::Error> {
-    SqlitePoolOptions::new()
+    let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
@@ -16,7 +16,17 @@ pub async fn connect(path: &Path) -> Result<sqlx::SqlitePool, sqlx::Error> {
                 .busy_timeout(Duration::from_secs(5))
                 .foreign_keys(true),
         )
-        .await
+        .await?;
+    sqlx::query("PRAGMA journal_mode = WAL")
+        .execute(&pool)
+        .await?;
+    sqlx::query("PRAGMA synchronous = NORMAL")
+        .execute(&pool)
+        .await?;
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await?;
+    Ok(pool)
 }
 
 #[derive(Debug)]
@@ -66,6 +76,8 @@ pub async fn migrate_path(path: &Path) -> Result<(), String> {
     let mut connection = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(false)
+        .busy_timeout(Duration::from_secs(5))
+        .foreign_keys(true)
         .connect()
         .await
         .map_err(|error| error.to_string())?;
@@ -117,6 +129,41 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 3);
             pool.close().await;
+        });
+    }
+
+    #[test]
+    fn production_connection_enables_foreign_keys_and_durability_pragmas() {
+        tauri::async_runtime::block_on(async {
+            let path = std::env::temp_dir().join(format!(
+                "ate05-pragmas-{}-{}.db",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::File::create(&path).unwrap();
+            let pool = connect(&path).await.unwrap();
+            let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(foreign_keys, 1);
+            assert_eq!(journal_mode.to_lowercase(), "wal");
+            assert_eq!(synchronous, 1);
+            pool.close().await;
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(path.with_extension("db-wal"));
+            let _ = std::fs::remove_file(path.with_extension("db-shm"));
         });
     }
 }

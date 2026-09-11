@@ -340,6 +340,12 @@ fn main() {
             tauri::async_runtime::block_on(async {
                 let pool =
                     database::connect(&app.path().app_config_dir()?.join("ate05.db")).await?;
+                let health = backup::health(&pool).await;
+                if !health.healthy {
+                    return Err(
+                        format!("ATE05 database recovery is required: {}", health.message).into(),
+                    );
+                }
                 let instances = app.state::<tauri_plugin_sql::DbInstances>();
                 let previous = instances.0.write().await.insert(
                     "sqlite:ate05.db".into(),

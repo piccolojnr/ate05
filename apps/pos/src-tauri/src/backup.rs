@@ -93,6 +93,13 @@ pub async fn health(pool: &SqlitePool) -> DatabaseHealth {
         if integrity != "ok" {
             return Err(format!("integrity check returned {integrity}"));
         }
+        let foreign_key_errors = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        if !foreign_key_errors.is_empty() {
+            return Err("foreign-key check found inconsistent records".into());
+        }
         let version = schema_version(pool).await?;
         if version > CURRENT_SCHEMA_VERSION {
             return Err("database schema is newer than this application".into());
@@ -131,6 +138,13 @@ pub async fn validate(path: &Path) -> Result<BackupInfo, String> {
             return Err(format!(
                 "invalid_backup: integrity check returned {integrity}"
             ));
+        }
+        let foreign_key_errors = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&pool)
+            .await
+            .map_err(|error| format!("invalid_backup: foreign-key check failed ({error})"))?;
+        if !foreign_key_errors.is_empty() {
+            return Err("invalid_backup: foreign-key check found inconsistent records".into());
         }
         for table in EXPECTED_TABLES {
             let exists: Option<i64> = sqlx::query_scalar(

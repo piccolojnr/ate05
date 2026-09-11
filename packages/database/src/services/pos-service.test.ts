@@ -71,6 +71,27 @@ describe("POS application service", () => {
     });
   });
 
+  it("rolls back sequence allocation when order creation fails and reuses it on retry", () => {
+    database.sqlite.exec(
+      "CREATE TRIGGER fail_order_write AFTER INSERT ON orders BEGIN SELECT RAISE(ABORT, 'injected order failure'); END",
+    );
+    expect(() =>
+      service.createOrder({
+        businessId: business,
+        createdBy: owner,
+        orderType: "takeaway",
+      }),
+    ).toThrow("injected order failure");
+    database.sqlite.exec("DROP TRIGGER fail_order_write");
+    expect(
+      service.createOrder({
+        businessId: business,
+        createdBy: owner,
+        orderType: "takeaway",
+      }).orderNumber,
+    ).toBe(1);
+  });
+
   it("creates takeaway orders without a table and rejects invalid table combinations", () => {
     const order = service.addMenuItem({
       businessId: business,
@@ -269,6 +290,33 @@ describe("POS application service", () => {
     ).toBe("occupied");
   });
 
+  it("rolls back a kitchen ticket if ticket items fail after the ticket row", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "takeaway",
+    });
+    database.sqlite.exec(
+      "CREATE TRIGGER fail_kitchen_item AFTER INSERT ON kitchen_ticket_items BEGIN SELECT RAISE(ABORT, 'injected kitchen item failure'); END",
+    );
+    expect(() =>
+      service.sendOrderToKitchen({
+        businessId: business,
+        orderId: order.id,
+        userId: owner,
+      }),
+    ).toThrow("injected kitchen item failure");
+    expect(
+      database.sqlite
+        .prepare(
+          "SELECT COUNT(*) AS count FROM kitchen_tickets WHERE order_id = ?",
+        )
+        .get(order.id),
+    ).toEqual({ count: 0 });
+    expect(service.getOrder(order.id, business).status).toBe("open");
+  });
+
   it("creates and manages business-scoped tables with reservation state", () => {
     const patio = service.createTable({
       businessId: business,
@@ -354,6 +402,28 @@ describe("POS application service", () => {
         .listAvailableTables(business)
         .find((table) => table.id === table1),
     ).toMatchObject({ status: "available" });
+  });
+
+  it("rolls back order completion when table release fails", () => {
+    const order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: friedRice,
+      orderType: "dine_in",
+      tableId: table1,
+    });
+    database.sqlite.exec(
+      "CREATE TRIGGER fail_table_release AFTER UPDATE OF status ON restaurant_tables BEGIN SELECT RAISE(ABORT, 'injected table release failure'); END",
+    );
+    expect(() => service.completeOrder(order.id, business)).toThrow(
+      "injected table release failure",
+    );
+    expect(service.getOrder(order.id, business).status).toBe("open");
+    expect(
+      service
+        .listAvailableTables(business)
+        .find((table) => table.id === table1),
+    ).toMatchObject({ status: "occupied" });
   });
 
   it("does not allow deactivated tables to start new orders", () => {
@@ -764,5 +834,27 @@ describe("POS application service", () => {
       active: false,
     });
     expect(service.listStockMovements(item.id, business)).toEqual(before);
+  });
+
+  it("rolls back an inventory movement if the balance update cannot complete", () => {
+    const item = service.createInventoryItem({
+      businessId: business,
+      createdBy: owner,
+      name: "Rollback Oil",
+      unit: "ml",
+      startingQuantity: 1000,
+      reorderThreshold: 200,
+    });
+    database.sqlite.exec(
+      "CREATE TRIGGER fail_stock_balance AFTER INSERT ON stock_movements BEGIN SELECT RAISE(ABORT, 'injected stock failure'); END",
+    );
+    expect(() =>
+      service.receiveStock(business, owner, item.id, 500, "Purchase"),
+    ).toThrow("injected stock failure");
+    expect(
+      service.listInventory(business).find((entry) => entry.id === item.id)
+        ?.currentQuantity,
+    ).toBe(1000);
+    expect(service.listStockMovements(item.id, business)).toHaveLength(1);
   });
 });
