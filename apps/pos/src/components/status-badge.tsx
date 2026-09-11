@@ -8,6 +8,7 @@ const statusMap: Record<string, { label: string; tone: BadgeProps["tone"] }> = {
   sent_to_kitchen: { label: "Sent to kitchen", tone: "primary" },
   preparing: { label: "Preparing", tone: "warning" },
   ready: { label: "Ready", tone: "success" },
+  new: { label: "New", tone: "primary" },
   completed: { label: "Completed", tone: "success" },
   unpaid: { label: "Unpaid", tone: "warning" },
   partially_paid: { label: "Partially paid", tone: "warning" },

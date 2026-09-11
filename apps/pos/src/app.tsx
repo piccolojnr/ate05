@@ -28,6 +28,7 @@ import type { MenuManagementData } from "./lib/pos-client";
 import { OrdersScreen } from "./screens/orders/orders-screen";
 import { AuthScreen } from "./screens/auth-screen";
 import { FirstRunSetupScreen } from "./screens/first-run-setup-screen";
+import { KitchenScreen } from "./screens/kitchen/kitchen-screen";
 
 const client = getPosClient();
 
@@ -52,6 +53,9 @@ export function App() {
     useState<MenuManagementData | null>(null);
   const [order, setOrder] = useState<PosOrder | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [kitchenOrders, setKitchenOrders] = useState<PosOrder[]>([]);
+  const [kitchenLoading, setKitchenLoading] = useState(false);
+  const [kitchenError, setKitchenError] = useState<string | null>(null);
   const [category, setCategory] = useState("All");
   const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
   const [tableId, setTableId] = useState<string | null>(null);
@@ -174,6 +178,31 @@ export function App() {
     const timer = window.setTimeout(() => void refresh(), 0);
     return () => window.clearTimeout(timer);
   }, [refresh, session]);
+  const refreshKitchen = useCallback(async () => {
+    setKitchenLoading(true);
+    try {
+      setKitchenError(null);
+      setKitchenOrders(await client.listKitchenOrders());
+    } catch (cause) {
+      setKitchenError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to load kitchen tickets.",
+      );
+    } finally {
+      setKitchenLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (!session || activeScreen !== "Kitchen") return;
+    const timer = window.setTimeout(() => void refreshKitchen(), 0);
+    const onFocus = () => void refreshKitchen();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [activeScreen, refreshKitchen, session]);
   async function setupOwnerPin(userId: string, pin: string) {
     await client.setupOwnerPin(userId, pin);
     setAuthBootstrap(await client.authBootstrap());
@@ -295,6 +324,26 @@ export function App() {
       );
     } finally {
       setSendingToKitchen(false);
+    }
+  }
+  async function advanceKitchenOrder(
+    orderId: string,
+    status: "preparing" | "ready",
+  ) {
+    try {
+      await client.updateKitchenOrderStatus(orderId, status);
+      await refreshKitchen();
+      await refresh();
+      notify.success(
+        status === "ready" ? "Order marked ready." : "Order is now preparing.",
+      );
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to update kitchen order.",
+      );
+      await refreshKitchen();
     }
   }
   async function reprintTicket(ticketId: string) {
@@ -555,12 +604,21 @@ export function App() {
         </div>
       )
     ) : (
-      <div className="mx-auto max-w-6xl">
+      <div className={activeScreen === "Kitchen" ? "h-full min-h-0" : ""}>
         {activeScreen === "Orders" && (
           <OrdersScreen
             orders={bootstrap?.openOrders ?? []}
             onOpenOrder={openOrder}
             onNewOrder={startNewOrder}
+          />
+        )}
+        {activeScreen === "Kitchen" && (
+          <KitchenScreen
+            orders={kitchenOrders}
+            loading={kitchenLoading}
+            error={kitchenError}
+            onRefresh={refreshKitchen}
+            onAdvance={advanceKitchenOrder}
           />
         )}
         {activeScreen === "Tables" && (
@@ -683,7 +741,7 @@ export function App() {
       canOpenSettings={session.permissions.includes("settings")}
     >
       <div
-        className={`min-h-0 flex-1 ${activeScreen === "POS" ? "flex flex-col overflow-hidden p-4 xl:p-6" : "overflow-auto p-8"}`}
+        className={`min-h-0 flex-1 ${activeScreen === "POS" ? "flex flex-col overflow-hidden p-4 xl:p-6" : activeScreen === "Kitchen" ? "overflow-hidden p-4 xl:p-6" : "overflow-auto p-8"}`}
       >
         <div className="mb-3 flex items-center gap-2 lg:hidden">
           <Badge tone="primary">{itemCount} items in current order</Badge>
@@ -693,7 +751,17 @@ export function App() {
             Loading local restaurant data…
           </p>
         ) : null}
-        {content}
+        <div
+          className={
+            activeScreen === "POS"
+              ? "flex h-full min-h-0 w-full flex-col"
+              : activeScreen === "Kitchen"
+                ? "mx-auto flex h-full min-h-0 w-full max-w-[1600px] flex-col"
+                : "mx-auto max-w-6xl"
+          }
+        >
+          {content}
+        </div>
       </div>
     </AppShell>
   );

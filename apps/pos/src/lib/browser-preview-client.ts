@@ -256,12 +256,15 @@ export function createBrowserPreviewClient(): PosClient {
           "menu",
           "inventory",
           "settings",
+          "kitchen",
           "staff",
           "printers",
           "backup",
           "inventory_adjustment",
         ]
-      : ["pos", "orders", "tables"];
+      : role === "kitchen"
+        ? ["pos", "orders", "kitchen", "inventory"]
+        : ["pos", "orders", "tables"];
   const requirePermission = (permission: string) => {
     if (!session) throw new Error("Please sign in again.");
     if (!session.permissions.includes(permission))
@@ -880,6 +883,38 @@ export function createBrowserPreviewClient(): PosClient {
       );
       writeState(state);
       return updated;
+    },
+    async listKitchenOrders() {
+      requirePermission("kitchen");
+      return readState()
+        .orders.filter(
+          (order) =>
+            ["sent_to_kitchen", "preparing", "ready"].includes(order.status) &&
+            order.kitchenTickets.length > 0,
+        )
+        .sort((a, b) =>
+          `${a.openedAt}:${a.orderNumber}`.localeCompare(
+            `${b.openedAt}:${b.orderNumber}`,
+          ),
+        );
+    },
+    async updateKitchenOrderStatus(orderId, status) {
+      requirePermission("kitchen");
+      const state = readState();
+      const order = state.orders.find((entry) => entry.id === orderId);
+      if (!order)
+        throw new PosClientError("not_found", "Kitchen order not found.");
+      const valid =
+        (order.status === "sent_to_kitchen" && status === "preparing") ||
+        (order.status === "preparing" && status === "ready");
+      if (!valid)
+        throw new PosClientError(
+          "invalid_state",
+          "This kitchen order has already moved to another stage.",
+        );
+      order.status = status;
+      writeState(state);
+      return order;
     },
     async listPrinters() {
       return readState().printers;

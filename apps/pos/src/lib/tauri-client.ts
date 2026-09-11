@@ -1781,6 +1781,49 @@ export function createTauriClient(): PosClient {
         throw error;
       }
     },
+    async listKitchenOrders() {
+      requirePermission("kitchen");
+      const db = await database();
+      const rows = await select<Row>(
+        db,
+        "SELECT id FROM orders WHERE business_id = $1 AND status IN ('sent_to_kitchen', 'preparing', 'ready') AND EXISTS (SELECT 1 FROM kitchen_tickets WHERE order_id = orders.id AND business_id = $1) ORDER BY opened_at ASC, order_number ASC",
+        [businessId],
+      );
+      return Promise.all(rows.map((row) => getOrder(db, asString(row.id))));
+    },
+    async updateKitchenOrderStatus(orderId, status) {
+      requirePermission("kitchen");
+      const db = await database();
+      await execute(db, "BEGIN IMMEDIATE");
+      try {
+        const [row] = await select<Row>(
+          db,
+          "SELECT status FROM orders WHERE id = $1 AND business_id = $2",
+          [orderId, businessId],
+        );
+        if (!row)
+          throw new PosClientError("not_found", "Kitchen order not found.");
+        const current = asString(row.status);
+        const valid =
+          (current === "sent_to_kitchen" && status === "preparing") ||
+          (current === "preparing" && status === "ready");
+        if (!valid)
+          throw new PosClientError(
+            "invalid_state",
+            "This kitchen order has already moved to another stage.",
+          );
+        await execute(
+          db,
+          "UPDATE orders SET status = $1, updated_at = $2 WHERE id = $3 AND business_id = $4 AND status = $5",
+          [status, timestamp(), orderId, businessId, current],
+        );
+        await execute(db, "COMMIT");
+        return getOrder(db, orderId);
+      } catch (cause) {
+        await execute(db, "ROLLBACK");
+        throw cause;
+      }
+    },
     async listPrinters() {
       const db = await database();
       const rows = await select<Row>(

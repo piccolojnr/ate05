@@ -7,6 +7,7 @@ const icons: Record<NavigationItem, IconName> = {
   POS: "pos",
   Orders: "orders",
   Tables: "tables",
+  Kitchen: "kitchen",
   Menu: "menu",
   Inventory: "inventory",
   Settings: "settings",

@@ -150,6 +150,11 @@ export interface PaymentsClient {
 }
 
 export interface KitchenClient {
+  listKitchenOrders(): Promise<PosOrder[]>;
+  updateKitchenOrderStatus(
+    orderId: string,
+    status: "preparing" | "ready",
+  ): Promise<PosOrder>;
   sendOrderToKitchen(orderId: string): Promise<PosOrder>;
   retryPendingKitchenPrints(): Promise<PosOrder[]>;
   reprintKitchenTicket(orderId: string, ticketId: string): Promise<void>;

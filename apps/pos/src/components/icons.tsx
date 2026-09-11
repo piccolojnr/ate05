@@ -4,6 +4,7 @@ export type IconName =
   | "pos"
   | "orders"
   | "tables"
+  | "kitchen"
   | "menu"
   | "inventory"
   | "settings"
@@ -40,6 +41,12 @@ export function Icon({
     tables: (
       <>
         <path {...common} d="M5 5h14v6H5zM8 11v8M16 11v8M4 19h16" />
+      </>
+    ),
+    kitchen: (
+      <>
+        <path {...common} d="M5 4h14v16H5zM8 8h8M8 12h5M8 16h8" />
+        <path {...common} d="M16 12h.01" />
       </>
     ),
     menu: (
