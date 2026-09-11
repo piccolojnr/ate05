@@ -1,5 +1,18 @@
 export type OrderType = "dine_in" | "takeaway";
-import type { PrinterConfig, PaperWidth } from "@ate05/printing";
+import type { PrinterConfig } from "@ate05/printing";
+import type {
+  BootstrapClient,
+  CatalogClient,
+  InventoryClient,
+  KitchenClient,
+  OrdersClient,
+  PaymentsClient,
+  PrintingClient,
+  RecoveryClient,
+  SessionClient,
+  SettingsClient,
+  TablesClient,
+} from "./client-capabilities";
 
 export interface MenuCategory {
   id: string;
@@ -192,169 +205,19 @@ export interface PosBootstrap {
   inventory: InventoryItem[];
 }
 
-export interface PosClient {
-  authBootstrap(): Promise<AuthBootstrap>;
-  setupOwnerPin(userId: string, pin: string): Promise<void>;
-  saveSetupProgress(input: {
-    step: number;
-    businessName: string;
-    ownerName: string;
-    starterPack: string;
-    tableCount: number;
-  }): Promise<void>;
-  completeFirstRunSetup(input: {
-    businessName: string;
-    ownerUserId: string;
-    ownerName: string;
-    ownerPin: string;
-    starterPack: "empty" | "ghanaian" | "fast_food" | "drinks_snacks";
-    tableCount: number;
-  }): Promise<void>;
-  authenticateUser(userId: string, pin: string): Promise<SessionUser>;
-  currentSession(): Promise<SessionUser | null>;
-  lockSession(): Promise<void>;
-  listStaff(): Promise<AuthUser[]>;
-  createStaff(name: string, role: string, pin: string): Promise<AuthUser>;
-  updateStaff(input: {
-    userId: string;
-    name: string;
-    role: string;
-    active: boolean;
-    pin?: string;
-  }): Promise<void>;
-  bootstrap(): Promise<PosBootstrap>;
-  listMenuManagement(): Promise<MenuManagementData>;
-  createMenuItem(input: {
-    name: string;
-    description?: string | null;
-    categoryId: string;
-    sellingPriceMinor: number;
-    available: boolean;
-    active: boolean;
-  }): Promise<MenuManagementItem>;
-  updateMenuItem(input: {
-    id: string;
-    name: string;
-    description?: string | null;
-    categoryId: string;
-    sellingPriceMinor: number;
-    available: boolean;
-    active: boolean;
-  }): Promise<MenuManagementItem>;
-  createMenuCategory(name: string): Promise<MenuCategory>;
-  updateMenuCategory(input: {
-    id: string;
-    name: string;
-    active: boolean;
-  }): Promise<MenuCategory>;
-  addMenuItem(input: {
-    orderId?: string;
-    menuItemId: string;
-    orderType: OrderType;
-    tableId?: string | null;
-  }): Promise<PosOrder>;
-  createTable(input: {
-    name: string;
-    capacity?: number;
-    active?: boolean;
-  }): Promise<RestaurantTable>;
-  updateTable(input: {
-    id: string;
-    name: string;
-    capacity?: number;
-    active: boolean;
-  }): Promise<RestaurantTable>;
-  setTableReservationState(
-    tableId: string,
-    reserved: boolean,
-  ): Promise<RestaurantTable>;
-  completeOrder(orderId: string): Promise<PosOrder>;
-  getOrder(orderId: string): Promise<PosOrder>;
-  updateOrderItemQuantity(
-    orderId: string,
-    itemId: string,
-    quantity: number,
-  ): Promise<PosOrder>;
-  updateOrderItemNote(
-    orderId: string,
-    itemId: string,
-    notes: string,
-  ): Promise<PosOrder>;
-  removeOrderItem(orderId: string, itemId: string): Promise<PosOrder>;
-  sendOrderToKitchen(orderId: string): Promise<PosOrder>;
-  listPrinters(): Promise<PosPrinterConfig[]>;
-  savePrinter(input: {
-    id?: string;
-    role?: "kitchen" | "receipt";
-    name: string;
-    connectionType: "network" | "usb";
-    address: string;
-    port: number | null;
-    paperWidth: PaperWidth;
-    cutterEnabled: boolean;
-    active: boolean;
-  }): Promise<PosPrinterConfig>;
-  testPrinter(printerId: string): Promise<void>;
-  retryPendingKitchenPrints(): Promise<PosOrder[]>;
-  reprintKitchenTicket(orderId: string, ticketId: string): Promise<void>;
-  recordPayment(input: {
-    orderId: string;
-    method: PaymentMethod;
-    amountMinor: number;
-    cashTenderedMinor?: number | null;
-    reference?: string | null;
-    idempotencyKey: string;
-  }): Promise<PosOrder>;
-  listReceipts(): Promise<PosReceipt[]>;
-  retryPendingReceiptPrints(): Promise<PosOrder[]>;
-  reprintReceipt(orderId: string): Promise<void>;
-  listBackups(): Promise<BackupInfo[]>;
-  backupNow(): Promise<BackupInfo>;
-  exportBackup(): Promise<string | null>;
-  databaseHealth(): Promise<DatabaseHealth>;
-  restoreBackup(fileName: string): Promise<BackupInfo>;
-  listInventory(): Promise<InventoryItem[]>;
-  getInventoryItem(itemId: string): Promise<InventoryItem>;
-  listStockMovements(itemId: string): Promise<StockMovement[]>;
-  createInventoryItem(input: {
-    name: string;
-    unit: InventoryUnit;
-    startingQuantity: number;
-    reorderThreshold: number | null;
-  }): Promise<InventoryItem>;
-  updateInventoryItem(input: {
-    id: string;
-    name: string;
-    unit: InventoryUnit;
-    reorderThreshold: number | null;
-    active: boolean;
-  }): Promise<InventoryItem>;
-  receiveStock(
-    itemId: string,
-    quantity: number,
-    reason?: string,
-  ): Promise<InventoryItem>;
-  issueStock(
-    itemId: string,
-    quantity: number,
-    reason?: string,
-  ): Promise<InventoryItem>;
-  recordWaste(
-    itemId: string,
-    quantity: number,
-    reason: string,
-  ): Promise<InventoryItem>;
-  returnStock(
-    itemId: string,
-    quantity: number,
-    reason?: string,
-  ): Promise<InventoryItem>;
-  adjustStockToCount(
-    itemId: string,
-    countedQuantity: number,
-    reason: string,
-  ): Promise<InventoryItem>;
-}
+export interface PosClient
+  extends
+    SessionClient,
+    BootstrapClient,
+    CatalogClient,
+    OrdersClient,
+    PaymentsClient,
+    KitchenClient,
+    TablesClient,
+    InventoryClient,
+    PrintingClient,
+    SettingsClient,
+    RecoveryClient {}
 
 export function formatGhs(minor: number): string {
   return `GHS ${(minor / 100).toFixed(2)}`;

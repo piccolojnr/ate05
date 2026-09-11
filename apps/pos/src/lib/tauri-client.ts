@@ -30,6 +30,9 @@ import type {
   MenuManagementItem,
 } from "./pos-client";
 import type { PaperWidth } from "@ate05/printing";
+import { PosClientError } from "./client-errors";
+
+export { PosClientError } from "./client-errors";
 
 const databaseUrl = "sqlite:ate05.db";
 const businessId = "00000000-0000-4000-8000-000000000001";
@@ -39,17 +42,6 @@ let currentUser: SessionUser | null = null;
 type SqlDatabase = Awaited<ReturnType<typeof Database.load>>;
 type Row = Record<string, unknown>;
 
-export class PosClientError extends Error {
-  constructor(
-    public readonly code:
-      "validation" | "not_found" | "unavailable" | "invalid_state" | "database",
-    message: string,
-  ) {
-    super(message);
-    this.name = "PosClientError";
-  }
-}
-
 function timestamp(): string {
   return new Date().toISOString();
 }
@@ -58,7 +50,7 @@ function requirePermission(permission: string): void {
     throw new PosClientError("unavailable", "Please sign in again.");
   if (!currentUser.permissions.includes(permission))
     throw new PosClientError(
-      "unavailable",
+      "unauthorized",
       "You do not have permission to perform this action.",
     );
 }
