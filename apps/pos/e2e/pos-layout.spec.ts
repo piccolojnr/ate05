@@ -1,9 +1,21 @@
 import { expect, test } from "@playwright/test";
 
+async function signIn(page: import("@playwright/test").Page) {
+  if (await page.getByLabel("Staff PIN").count()) {
+    await page.getByLabel("Staff PIN").fill("2468");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByLabel("Current order")).toBeVisible();
+  }
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+  await signIn(page);
+});
+
 test("action errors dismiss automatically and can be paused or dismissed", async ({
   page,
 }) => {
-  await page.goto("/");
   await expect(
     page.getByRole("button", { name: "Add Fried Rice" }),
   ).toBeVisible();
@@ -36,7 +48,7 @@ for (const [width, height] of [
     page,
   }) => {
     await page.setViewportSize({ width: width!, height: height! });
-    await page.goto("/");
+    await signIn(page);
     await page.getByRole("button", { name: "Takeaway" }).click();
     await page.getByRole("button", { name: "Add Fried Rice" }).click();
     await expect(page.getByLabel("Current order")).toContainText("#0001");
@@ -57,6 +69,7 @@ for (const [width, height] of [
       localStorage.setItem(key, JSON.stringify(state));
     });
     await page.reload();
+    await signIn(page);
     await page.getByRole("button", { name: "Orders", exact: true }).click();
     await page
       .getByRole("button", { name: "Open Order", exact: true })

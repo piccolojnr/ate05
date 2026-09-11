@@ -154,6 +154,27 @@ export interface DatabaseHealth {
   message: string;
 }
 
+export interface AuthUser {
+  id: string;
+  name: string;
+  role: string;
+  active: boolean;
+  hasPin: boolean;
+}
+
+export interface AuthBootstrap {
+  users: AuthUser[];
+  requiresOwnerPin: boolean;
+}
+
+export interface SessionUser {
+  id: string;
+  businessId: string;
+  name: string;
+  role: string;
+  permissions: string[];
+}
+
 export interface PosBootstrap {
   businessId: string;
   createdBy: string;
@@ -165,6 +186,20 @@ export interface PosBootstrap {
 }
 
 export interface PosClient {
+  authBootstrap(): Promise<AuthBootstrap>;
+  setupOwnerPin(userId: string, pin: string): Promise<void>;
+  authenticateUser(userId: string, pin: string): Promise<SessionUser>;
+  currentSession(): Promise<SessionUser | null>;
+  lockSession(): Promise<void>;
+  listStaff(): Promise<AuthUser[]>;
+  createStaff(name: string, role: string, pin: string): Promise<AuthUser>;
+  updateStaff(input: {
+    userId: string;
+    name: string;
+    role: string;
+    active: boolean;
+    pin?: string;
+  }): Promise<void>;
   bootstrap(): Promise<PosBootstrap>;
   listMenuManagement(): Promise<MenuManagementData>;
   createMenuItem(input: {

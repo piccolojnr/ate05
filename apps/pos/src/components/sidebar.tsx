@@ -1,6 +1,7 @@
 import { cn } from "@ate05/ui";
 import { navigationItems, type NavigationItem } from "../data";
 import { Icon, type IconName } from "./icons";
+import type { SessionUser } from "../lib/pos-client";
 
 const icons: Record<NavigationItem, IconName> = {
   POS: "pos",
@@ -14,10 +15,15 @@ const icons: Record<NavigationItem, IconName> = {
 export function Sidebar({
   active,
   onNavigate,
+  session,
+  onLock,
 }: {
   active: NavigationItem;
   onNavigate: (item: NavigationItem) => void;
+  session: SessionUser;
+  onLock: () => void;
 }) {
+  const allowed = new Set(session.permissions);
   return (
     <aside
       className="flex h-full w-[260px] shrink-0 flex-col border-r border-nav-border bg-nav p-4 text-nav-foreground max-lg:w-[76px] max-lg:px-3"
@@ -30,29 +36,37 @@ export function Sidebar({
         </p>
       </div>
       <nav className="space-y-1">
-        {navigationItems.map((item) => (
-          <button
-            key={item}
-            type="button"
-            onClick={() => onNavigate(item)}
-            aria-current={active === item ? "page" : undefined}
-            className={cn(
-              "flex min-h-11 w-full items-center gap-3 rounded-md border px-3 text-left text-sm font-semibold transition-colors",
-              active === item
-                ? "border-nav-active bg-nav-active text-nav-active-foreground"
-                : "border-transparent text-nav-muted hover:bg-nav-hover hover:text-nav-foreground",
-            )}
-          >
-            <Icon name={icons[item]} />
-            <span className="max-lg:hidden">{item}</span>
-          </button>
-        ))}
+        {navigationItems
+          .filter((item) => allowed.has(item.toLowerCase()))
+          .map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => onNavigate(item)}
+              aria-current={active === item ? "page" : undefined}
+              className={cn(
+                "flex min-h-11 w-full items-center gap-3 rounded-md border px-3 text-left text-sm font-semibold transition-colors",
+                active === item
+                  ? "border-nav-active bg-nav-active text-nav-active-foreground"
+                  : "border-transparent text-nav-muted hover:bg-nav-hover hover:text-nav-foreground",
+              )}
+            >
+              <Icon name={icons[item]} />
+              <span className="max-lg:hidden">{item}</span>
+            </button>
+          ))}
       </nav>
       <div className="mt-auto rounded-md border border-nav-border bg-nav-hover p-3 max-lg:hidden">
-        <p className="text-xs">Receptionist</p>
+        <p className="text-xs">{session.role}</p>
         <p className="mt-1 flex justify-between text-xs">
-          <strong>Naa Adjeley</strong>
-          <span className="text-success">● Online</span>
+          <strong>{session.name}</strong>
+          <button
+            type="button"
+            className="text-nav-muted underline-offset-2 hover:underline"
+            onClick={onLock}
+          >
+            Lock
+          </button>
         </p>
       </div>
     </aside>

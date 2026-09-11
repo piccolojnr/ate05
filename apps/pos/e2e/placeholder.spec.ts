@@ -1,13 +1,26 @@
 import { expect, test } from "@playwright/test";
 
+async function signIn(page: import("@playwright/test").Page) {
+  if (await page.getByLabel("Staff PIN").count()) {
+    await page.getByLabel("Staff PIN").fill("2468");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByLabel("Current order")).toBeVisible();
+  }
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+  await signIn(page);
+});
+
 test("cashier can create, persist, and reopen a local order", async ({
   page,
 }) => {
-  await page.goto("/");
   await page.evaluate(() =>
     localStorage.removeItem("ate05-pos-browser-preview-v1"),
   );
   await page.reload();
+  await signIn(page);
   await expect(page.getByLabel("Current order")).toBeVisible();
   await page.getByRole("button", { name: "Takeaway" }).click();
   await page.getByRole("button", { name: "Add Fried Rice" }).click();
@@ -48,13 +61,13 @@ test("cashier can create, persist, and reopen a local order", async ({
       .filter({ hasText: "Receipt reprinted" }),
   ).toBeVisible();
   await page.reload();
+  await signIn(page);
   await page.getByRole("button", { name: "Orders" }).click();
   await page.getByRole("button", { name: "Open Order" }).first().click();
   await expect(page.getByLabel("Current order")).toContainText("GHS 135.00");
 });
 
 test("renders local seating data", async ({ page }) => {
-  await page.goto("/");
   await page.getByRole("button", { name: "Tables" }).click();
   await expect(page.getByRole("heading", { name: "Tables" })).toBeVisible();
   await expect(page.getByText("Table 1")).toBeVisible();
@@ -63,11 +76,11 @@ test("renders local seating data", async ({ page }) => {
 test("operator can turn over a table through explicit order completion", async ({
   page,
 }) => {
-  await page.goto("/");
   await page.evaluate(() =>
     localStorage.removeItem("ate05-pos-browser-preview-v1"),
   );
   await page.reload();
+  await signIn(page);
   await page.getByRole("button", { name: "Tables" }).click();
   await page.getByRole("button", { name: "Add Table" }).click();
   await page.getByRole("dialog").getByLabel("Table name").fill("Patio 1");
@@ -100,11 +113,11 @@ test("operator can turn over a table through explicit order completion", async (
 test("operator can manage persisted menu items and use them in POS", async ({
   page,
 }) => {
-  await page.goto("/");
   await page.evaluate(() =>
     localStorage.removeItem("ate05-pos-browser-preview-v1"),
   );
   await page.reload();
+  await signIn(page);
   await page.getByRole("button", { name: "Menu", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Menu" })).toBeVisible();
   await page.getByRole("button", { name: "New Menu Item" }).click();
@@ -134,11 +147,11 @@ test("operator can manage persisted menu items and use them in POS", async ({
 test("cashier can receive, issue, and inspect inventory movements", async ({
   page,
 }) => {
-  await page.goto("/");
   await page.evaluate(() =>
     localStorage.removeItem("ate05-pos-browser-preview-v1"),
   );
   await page.reload();
+  await signIn(page);
   await page.getByRole("button", { name: "Inventory" }).click();
   await page.getByRole("button", { name: "New Inventory Item" }).click();
   await page.getByLabel("Inventory item name").fill("Rice stock");
@@ -163,11 +176,11 @@ test("cashier can receive, issue, and inspect inventory movements", async ({
 test("operator can configure independent kitchen and receipt printers", async ({
   page,
 }) => {
-  await page.goto("/");
   await page.evaluate(() =>
     localStorage.removeItem("ate05-pos-browser-preview-v1"),
   );
   await page.reload();
+  await signIn(page);
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await expect(page.getByText("Not configured").first()).toBeVisible();
@@ -188,6 +201,7 @@ test("operator can configure independent kitchen and receipt printers", async ({
   await page.getByRole("button", { name: "Save changes" }).nth(1).click();
   await expect(page.getByText("Configured · Enabled").nth(1)).toBeVisible();
   await page.reload();
+  await signIn(page);
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByLabel("Kitchen Printer address")).toHaveValue(
     "kitchen.local",
@@ -200,7 +214,6 @@ test("operator can configure independent kitchen and receipt printers", async ({
 test("browser preview explains that database backups are native-only", async ({
   page,
 }) => {
-  await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(
     page.getByRole("heading", { name: "Protect local restaurant data" }),

@@ -8,6 +8,9 @@ import type {
   PosBootstrap,
   BackupInfo,
   DatabaseHealth,
+  AuthBootstrap,
+  AuthUser,
+  SessionUser,
   PosClient,
   PosOrder,
   PosPayment,
@@ -224,6 +227,45 @@ function updateKitchenPending(order: PosOrder): PosOrder {
 
 /** Browser-only preview adapter. Desktop uses the explicit Tauri command client. */
 export function createBrowserPreviewClient(): PosClient {
+  let session: SessionUser | null = null;
+  let ownerPin = "2468";
+  const previewUsers = [
+    {
+      id: createdBy,
+      name: "ATE05 Owner",
+      role: "owner",
+      active: true,
+      hasPin: true,
+    },
+    {
+      id: "preview-cashier",
+      name: "Preview Cashier",
+      role: "cashier",
+      active: true,
+      hasPin: true,
+    },
+  ];
+  const previewPermissions = (role: string) =>
+    role === "owner"
+      ? [
+          "pos",
+          "orders",
+          "tables",
+          "menu",
+          "inventory",
+          "settings",
+          "staff",
+          "printers",
+          "backup",
+          "inventory_adjustment",
+        ]
+      : ["pos", "orders", "tables"];
+  const requirePermission = (permission: string) => {
+    if (!session) throw new Error("Please sign in again.");
+    if (!session.permissions.includes(permission))
+      throw new Error("You do not have permission to perform this action.");
+  };
+  const actorId = () => session?.id ?? createdBy;
   function applyMovement(
     state: PreviewState,
     itemId: string,
@@ -248,7 +290,7 @@ export function createBrowserPreviewClient(): PosClient {
       quantityDelta: delta,
       balanceAfter: next,
       reason: reason?.trim() || null,
-      createdBy,
+      createdBy: actorId(),
       createdAt: new Date().toISOString(),
     };
     item.currentQuantity = next;
@@ -256,6 +298,66 @@ export function createBrowserPreviewClient(): PosClient {
     return refreshInventory(item);
   }
   return {
+    async authBootstrap(): Promise<AuthBootstrap> {
+      return { users: previewUsers, requiresOwnerPin: false };
+    },
+    async setupOwnerPin(_userId, pin) {
+      if (!/^\d{4,6}$/.test(pin)) throw new Error("PIN must be 4 to 6 digits.");
+      ownerPin = pin;
+    },
+    async authenticateUser(userId, pin) {
+      const user = previewUsers.find((entry) => entry.id === userId);
+      const valid =
+        user &&
+        ((user.role === "owner" && pin === ownerPin) ||
+          (user.role === "cashier" && pin === "1357"));
+      if (!valid) throw new Error("Incorrect PIN.");
+      session = {
+        id: user.id,
+        businessId,
+        name: user.name,
+        role: user.role,
+        permissions: previewPermissions(user.role),
+      };
+      return session;
+    },
+    async currentSession() {
+      return session;
+    },
+    async lockSession() {
+      session = null;
+    },
+    async listStaff() {
+      if (!session?.permissions.includes("staff"))
+        throw new Error(
+          "Staff management is available to administrators only.",
+        );
+      return previewUsers;
+    },
+    async createStaff(name, role, pin) {
+      if (!session?.permissions.includes("staff"))
+        throw new Error("You do not have permission to perform this action.");
+      if (!name.trim()) throw new Error("Staff name is required.");
+      if (!/^\d{4,6}$/.test(pin)) throw new Error("PIN must be 4 to 6 digits.");
+      const user: AuthUser = {
+        id: crypto.randomUUID(),
+        name: name.trim(),
+        role,
+        active: true,
+        hasPin: true,
+      };
+      previewUsers.push(user);
+      return user;
+    },
+    async updateStaff(input) {
+      if (!session?.permissions.includes("staff"))
+        throw new Error("You do not have permission to perform this action.");
+      const user = previewUsers.find((entry) => entry.id === input.userId);
+      if (!user) throw new Error("Staff member not found.");
+      user.name = input.name.trim();
+      user.role = input.role;
+      user.active = input.active;
+    },
     async bootstrap(): Promise<PosBootstrap> {
       const state = readState();
       const menuCategories = state.menuCategories!;
@@ -273,7 +375,7 @@ export function createBrowserPreviewClient(): PosClient {
       );
       return {
         businessId,
-        createdBy,
+        createdBy: actorId(),
         categories: menuCategories.filter((category) => category.active),
         items: menuItems.filter(
           (item) =>
@@ -337,6 +439,7 @@ export function createBrowserPreviewClient(): PosClient {
       };
     },
     async createMenuItem(input) {
+      requirePermission("menu");
       if (!input.name.trim()) throw new Error("Menu item name is required.");
       if (
         !Number.isSafeInteger(input.sellingPriceMinor) ||
@@ -363,6 +466,7 @@ export function createBrowserPreviewClient(): PosClient {
       return { ...item, categoryName: category.name } as MenuManagementItem;
     },
     async updateMenuItem(input) {
+      requirePermission("menu");
       if (!input.name.trim()) throw new Error("Menu item name is required.");
       if (
         !Number.isSafeInteger(input.sellingPriceMinor) ||
@@ -389,6 +493,7 @@ export function createBrowserPreviewClient(): PosClient {
       return { ...item, categoryName: category.name } as MenuManagementItem;
     },
     async createMenuCategory(name) {
+      requirePermission("menu");
       if (!name.trim()) throw new Error("Category name is required.");
       const state = readState();
       const category = {
@@ -403,6 +508,7 @@ export function createBrowserPreviewClient(): PosClient {
       return category;
     },
     async updateMenuCategory(input) {
+      requirePermission("menu");
       const state = readState();
       const category = state.menuCategories!.find(
         (entry) => entry.id === input.id,
@@ -426,6 +532,7 @@ export function createBrowserPreviewClient(): PosClient {
       return category;
     },
     async createTable(input) {
+      requirePermission("tables");
       const name = input.name.trim();
       if (!name) throw new Error("Table name is required.");
       const capacity = input.capacity ?? 4;
@@ -450,6 +557,7 @@ export function createBrowserPreviewClient(): PosClient {
       return table;
     },
     async updateTable(input) {
+      requirePermission("tables");
       const state = readState();
       const table = state.tables!.find((entry) => entry.id === input.id);
       if (!table) throw new Error("Table not found.");
@@ -485,6 +593,7 @@ export function createBrowserPreviewClient(): PosClient {
       return table;
     },
     async setTableReservationState(tableId, reserved) {
+      requirePermission("tables");
       const state = readState();
       const table = state.tables!.find((entry) => entry.id === tableId);
       if (!table || !table.active) throw new Error("Table is unavailable.");
@@ -733,6 +842,7 @@ export function createBrowserPreviewClient(): PosClient {
       return readState().printers;
     },
     async savePrinter(input) {
+      requirePermission("printers");
       const state = readState();
       const printer: PosPrinterConfig = {
         id: input.id ?? crypto.randomUUID(),
@@ -854,6 +964,7 @@ export function createBrowserPreviewClient(): PosClient {
       return [];
     },
     async backupNow(): Promise<BackupInfo> {
+      requirePermission("backup");
       throw new Error("Backups are available in the native desktop app only.");
     },
     async databaseHealth(): Promise<DatabaseHealth> {
@@ -864,6 +975,7 @@ export function createBrowserPreviewClient(): PosClient {
       };
     },
     async restoreBackup(): Promise<BackupInfo> {
+      requirePermission("backup");
       throw new Error("Restore is available in the native desktop app only.");
     },
     async listInventory() {
@@ -880,6 +992,7 @@ export function createBrowserPreviewClient(): PosClient {
       );
     },
     async createInventoryItem(input) {
+      requirePermission("inventory");
       const state = readState();
       if (!input.name.trim())
         throw new Error("Inventory item name is required.");
@@ -912,6 +1025,7 @@ export function createBrowserPreviewClient(): PosClient {
       return refreshInventory(item);
     },
     async updateInventoryItem(input) {
+      requirePermission("inventory");
       const state = readState();
       const item = state.inventory.find((entry) => entry.id === input.id);
       if (!item) throw new Error("Inventory item not found.");
@@ -980,6 +1094,7 @@ export function createBrowserPreviewClient(): PosClient {
       return item;
     },
     async adjustStockToCount(itemId, countedQuantity, reason) {
+      requirePermission("inventory_adjustment");
       const state = readState();
       if (!Number.isSafeInteger(countedQuantity) || countedQuantity < 0)
         throw new Error(

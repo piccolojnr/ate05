@@ -6,11 +6,146 @@ import { isTauriRuntime } from "../../lib/get-pos-client";
 import type {
   BackupInfo,
   DatabaseHealth,
+  AuthUser,
   PosPrinterConfig,
 } from "../../lib/pos-client";
 
 type PrinterRole = "kitchen" | "receipt";
 type TestState = "idle" | "printing" | "success" | "failed";
+
+function StaffSection({
+  staff,
+  onCreate,
+  onUpdate,
+}: {
+  staff: AuthUser[];
+  onCreate: (name: string, role: string, pin: string) => Promise<void>;
+  onUpdate: (input: {
+    userId: string;
+    name: string;
+    role: string;
+    active: boolean;
+    pin?: string;
+  }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("cashier");
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [working, setWorking] = useState(false);
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    if (!name.trim() || !/^\d{4,6}$/.test(pin))
+      return setError("Enter a staff name and a 4–6 digit PIN.");
+    setWorking(true);
+    try {
+      await onCreate(name, role, pin);
+      setName("");
+      setPin("");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to create staff member.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  }
+  return (
+    <Card className="p-5">
+      <div>
+        <p className="text-xs font-bold uppercase tracking-wider text-primary">
+          Staff
+        </p>
+        <h2 className="mt-1 text-lg font-black">Local staff accounts</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Manage PIN access without an internet connection. PINs are never
+          displayed.
+        </p>
+      </div>
+      <form
+        className="mt-5 grid gap-3 sm:grid-cols-[1.4fr_1fr_1fr_auto]"
+        onSubmit={(event) => void create(event)}
+      >
+        <label className="text-sm font-semibold">
+          Name
+          <Input
+            className="mt-1"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            aria-label="Staff name"
+          />
+        </label>
+        <label className="text-sm font-semibold">
+          Role
+          <Select
+            className="mt-1 min-h-10"
+            value={role}
+            onChange={(event) => setRole(event.target.value)}
+            aria-label="Staff role"
+          >
+            <option value="cashier">Cashier</option>
+            <option value="manager">Manager</option>
+            <option value="kitchen">Kitchen</option>
+            <option value="inventory">Inventory</option>
+            <option value="waiter">Waiter</option>
+          </Select>
+        </label>
+        <label className="text-sm font-semibold">
+          PIN
+          <Input
+            className="mt-1"
+            type="password"
+            inputMode="numeric"
+            value={pin}
+            onChange={(event) =>
+              setPin(event.target.value.replace(/\D/g, "").slice(0, 6))
+            }
+            aria-label="New staff PIN"
+          />
+        </label>
+        <Button className="self-end" disabled={working}>
+          {working ? "Adding…" : "Add staff"}
+        </Button>
+      </form>
+      {error ? (
+        <p role="alert" className="mt-3 text-sm font-semibold text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <div className="mt-5 divide-y border-t">
+        {staff.map((user) => (
+          <div
+            className="flex flex-wrap items-center justify-between gap-3 py-3"
+            key={user.id}
+          >
+            <div>
+              <p className="font-semibold">{user.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {user.role} · {user.active ? "Active" : "Inactive"}
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              onClick={() =>
+                void onUpdate({
+                  userId: user.id,
+                  name: user.name,
+                  role: user.role,
+                  active: !user.active,
+                })
+              }
+            >
+              {user.active ? "Deactivate" : "Reactivate"}
+            </Button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
 
 function PrinterSettingsCard({
   role,
@@ -238,6 +373,9 @@ export function SettingsScreen({
   databaseHealth,
   onBackupNow,
   onRestoreBackup,
+  staff,
+  onCreateStaff,
+  onUpdateStaff,
 }: {
   printers: PosPrinterConfig[];
   onSavePrinter: (
@@ -250,6 +388,15 @@ export function SettingsScreen({
   databaseHealth: DatabaseHealth | null;
   onBackupNow: () => Promise<void>;
   onRestoreBackup: (fileName: string) => Promise<void>;
+  staff: AuthUser[];
+  onCreateStaff: (name: string, role: string, pin: string) => Promise<void>;
+  onUpdateStaff: (input: {
+    userId: string;
+    name: string;
+    role: string;
+    active: boolean;
+    pin?: string;
+  }) => Promise<void>;
 }) {
   const [backupState, setBackupState] = useState<"idle" | "working">("idle");
   const [selectedBackup, setSelectedBackup] = useState("");
@@ -332,6 +479,11 @@ export function SettingsScreen({
           </Button>
         </div>
       </Card>
+      <StaffSection
+        staff={staff}
+        onCreate={onCreateStaff}
+        onUpdate={onUpdateStaff}
+      />
       <Card className="p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

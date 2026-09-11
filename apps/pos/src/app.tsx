@@ -7,6 +7,7 @@ import { OrderPanel } from "./components/order-panel";
 import { type NavigationItem } from "./data";
 import { getPosClient } from "./lib/get-pos-client";
 import type {
+  AuthBootstrap,
   OpenOrder,
   PosBootstrap,
   PosClient,
@@ -14,6 +15,8 @@ import type {
   PosPrinterConfig,
   BackupInfo,
   DatabaseHealth,
+  SessionUser,
+  AuthUser,
 } from "./lib/pos-client";
 import { formatGhs } from "./lib/pos-client";
 import { TablesScreen } from "./screens/tables/tables-screen";
@@ -22,10 +25,16 @@ import { InventoryScreen } from "./screens/inventory/inventory-screen";
 import { SettingsScreen } from "./screens/settings/settings-screen";
 import type { MenuManagementData } from "./lib/pos-client";
 import { OrdersScreen } from "./screens/orders/orders-screen";
+import { AuthScreen } from "./screens/auth-screen";
 
 const client = getPosClient();
 
 export function App() {
+  const [authBootstrap, setAuthBootstrap] = useState<AuthBootstrap | null>(
+    null,
+  );
+  const [session, setSession] = useState<SessionUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [activeScreen, setActiveScreen] = useState<NavigationItem>("POS");
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(null);
   const [printers, setPrinters] = useState<PosPrinterConfig[]>([]);
@@ -33,6 +42,7 @@ export function App() {
   const [databaseHealth, setDatabaseHealth] = useState<DatabaseHealth | null>(
     null,
   );
+  const [staff, setStaff] = useState<AuthUser[]>([]);
   const [menuManagement, setMenuManagement] =
     useState<MenuManagementData | null>(null);
   const [order, setOrder] = useState<PosOrder | null>(null);
@@ -49,19 +59,29 @@ export function App() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextBootstrap, nextPrinters, nextMenu, nextBackups, nextHealth] =
-        await Promise.all([
-          client.bootstrap(),
-          client.listPrinters(),
-          client.listMenuManagement(),
-          client.listBackups(),
-          client.databaseHealth(),
-        ]);
+      const [
+        nextBootstrap,
+        nextPrinters,
+        nextMenu,
+        nextBackups,
+        nextHealth,
+        nextStaff,
+      ] = await Promise.all([
+        client.bootstrap(),
+        client.listPrinters(),
+        client.listMenuManagement(),
+        client.listBackups(),
+        client.databaseHealth(),
+        session?.permissions.includes("staff")
+          ? client.listStaff()
+          : Promise.resolve([]),
+      ]);
       setBootstrap(nextBootstrap);
       setPrinters(nextPrinters);
       setMenuManagement(nextMenu);
       setBackups(nextBackups);
       setDatabaseHealth(nextHealth);
+      setStaff(nextStaff);
     } catch (cause) {
       notify.error(
         cause instanceof Error
@@ -71,7 +91,7 @@ export function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [session]);
   async function refreshMenu() {
     setMenuManagement(await client.listMenuManagement());
     const nextBootstrap = await client.bootstrap();
@@ -107,9 +127,55 @@ export function App() {
     }
   }
   useEffect(() => {
+    void Promise.all([client.authBootstrap(), client.currentSession()])
+      .then(([nextAuth, current]) => {
+        setAuthBootstrap(nextAuth);
+        setSession(current);
+      })
+      .catch((cause) =>
+        notify.error(
+          cause instanceof Error
+            ? cause.message
+            : "Unable to load staff sign-in.",
+        ),
+      )
+      .finally(() => setAuthLoading(false));
+  }, []);
+  useEffect(() => {
+    if (!session) return;
     const timer = window.setTimeout(() => void refresh(), 0);
     return () => window.clearTimeout(timer);
-  }, [refresh]);
+  }, [refresh, session]);
+  async function setupOwnerPin(userId: string, pin: string) {
+    await client.setupOwnerPin(userId, pin);
+    setAuthBootstrap(await client.authBootstrap());
+  }
+  async function signIn(userId: string, pin: string) {
+    const next = await client.authenticateUser(userId, pin);
+    setSession(next);
+    setActiveScreen("POS");
+    return next;
+  }
+  async function lock() {
+    await client.lockSession();
+    setSession(null);
+    setOrder(null);
+  }
+  useEffect(() => {
+    if (!session) return;
+    let timer = window.setTimeout(() => void lock(), 5 * 60 * 1000);
+    const reset = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void lock(), 5 * 60 * 1000);
+    };
+    window.addEventListener("pointerdown", reset);
+    window.addEventListener("keydown", reset);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", reset);
+      window.removeEventListener("keydown", reset);
+    };
+  }, [session]);
   async function addItem(menuItemId: string) {
     try {
       const updated = await client.addMenuItem({
@@ -282,6 +348,16 @@ export function App() {
       ...current.filter((printer) => printer.id !== saved.id),
       saved,
     ]);
+  }
+  async function createStaff(name: string, role: string, pin: string) {
+    const created = await client.createStaff(name, role, pin);
+    setStaff((current) => [...current, created]);
+    notify.success("Staff member created.");
+  }
+  async function updateStaff(input: Parameters<PosClient["updateStaff"]>[0]) {
+    await client.updateStaff(input);
+    setStaff(await client.listStaff());
+    notify.success("Staff member updated.");
   }
   async function testPrinter(printerId: string) {
     await client.testPrinter(printerId);
@@ -466,12 +542,34 @@ export function App() {
             databaseHealth={databaseHealth}
             onBackupNow={backupNow}
             onRestoreBackup={restoreBackup}
+            staff={staff}
+            onCreateStaff={createStaff}
+            onUpdateStaff={updateStaff}
           />
         )}
       </div>
     );
+  if (authLoading || !authBootstrap)
+    return (
+      <main className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">
+        Loading ATE05…
+      </main>
+    );
+  if (!session)
+    return (
+      <AuthScreen
+        bootstrap={authBootstrap}
+        onLogin={signIn}
+        onSetupPin={setupOwnerPin}
+      />
+    );
   return (
-    <AppShell active={activeScreen} onNavigate={setActiveScreen}>
+    <AppShell
+      active={activeScreen}
+      onNavigate={setActiveScreen}
+      session={session}
+      onLock={() => void lock()}
+    >
       <div
         className={`min-h-0 flex-1 ${activeScreen === "POS" ? "flex flex-col overflow-hidden p-6" : "overflow-auto p-8"}`}
       >

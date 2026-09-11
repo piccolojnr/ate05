@@ -11,6 +11,9 @@ import {
 import type {
   KitchenTicket,
   BackupInfo,
+  AuthBootstrap,
+  AuthUser,
+  SessionUser,
   DatabaseHealth,
   OrderType,
   PosBootstrap,
@@ -31,6 +34,7 @@ const databaseUrl = "sqlite:ate05.db";
 const businessId = "00000000-0000-4000-8000-000000000001";
 const createdBy = "00000000-0000-4000-8000-000000000002";
 let databasePromise: Promise<Database> | undefined;
+let currentUser: SessionUser | null = null;
 type SqlDatabase = Awaited<ReturnType<typeof Database.load>>;
 type Row = Record<string, unknown>;
 
@@ -47,6 +51,18 @@ export class PosClientError extends Error {
 
 function timestamp(): string {
   return new Date().toISOString();
+}
+function requirePermission(permission: string): void {
+  if (!currentUser)
+    throw new PosClientError("unavailable", "Please sign in again.");
+  if (!currentUser.permissions.includes(permission))
+    throw new PosClientError(
+      "unavailable",
+      "You do not have permission to perform this action.",
+    );
+}
+function actorId(): string {
+  return currentUser?.id ?? createdBy;
 }
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -726,7 +742,7 @@ async function recordInventoryMovementNative(
         delta,
         next,
         reason?.trim() || null,
-        createdBy,
+        actorId(),
         now,
       ],
     );
@@ -750,6 +766,90 @@ async function recordInventoryMovementNative(
 /** Native-only adapter. Fixed operations are the only SQL sent through Tauri. */
 export function createTauriClient(): PosClient {
   const client: PosClient = {
+    async authBootstrap() {
+      try {
+        return await invoke<AuthBootstrap>("auth_bootstrap");
+      } catch {
+        throw new PosClientError("database", "Unable to load staff accounts.");
+      }
+    },
+    async setupOwnerPin(userId, pin) {
+      try {
+        await invoke("setup_owner_pin", { userId, pin });
+      } catch (cause) {
+        throw new PosClientError(
+          "validation",
+          String(cause).replace(/^.*?: /, ""),
+        );
+      }
+    },
+    async authenticateUser(userId, pin) {
+      try {
+        const user = await invoke<SessionUser>("authenticate_user", {
+          userId,
+          pin,
+        });
+        currentUser = user;
+        return user;
+      } catch (cause) {
+        const detail = String(cause);
+        throw new PosClientError(
+          "validation",
+          detail.includes("inactive")
+            ? "This account is inactive."
+            : "Incorrect PIN.",
+        );
+      }
+    },
+    async currentSession() {
+      try {
+        return await invoke<SessionUser | null>("current_session");
+      } catch {
+        return null;
+      }
+    },
+    async lockSession() {
+      await invoke("lock_session");
+      currentUser = null;
+    },
+    async listStaff() {
+      try {
+        return await invoke<AuthUser[]>("list_staff");
+      } catch {
+        throw new PosClientError(
+          "unavailable",
+          "Staff management is available to administrators only.",
+        );
+      }
+    },
+    async createStaff(name, role, pin) {
+      requirePermission("staff");
+      try {
+        return await invoke<AuthUser>("create_staff", { name, role, pin });
+      } catch (cause) {
+        throw new PosClientError(
+          "validation",
+          String(cause).replace(/^.*?: /, ""),
+        );
+      }
+    },
+    async updateStaff(input) {
+      requirePermission("staff");
+      try {
+        await invoke("update_staff", {
+          userId: input.userId,
+          name: input.name,
+          role: input.role,
+          active: input.active,
+          pin: input.pin ?? null,
+        });
+      } catch (cause) {
+        throw new PosClientError(
+          "validation",
+          String(cause).replace(/^.*?: /, ""),
+        );
+      }
+    },
     async bootstrap(): Promise<PosBootstrap> {
       const db = await database();
       await ensureBootstrap(db);
@@ -776,7 +876,7 @@ export function createTauriClient(): PosClient {
       const inventory = await listInventoryRows(db);
       return {
         businessId,
-        createdBy,
+        createdBy: actorId(),
         categories: categories.map((row) => ({
           id: asString(row.id),
           name: asString(row.name),
@@ -804,6 +904,7 @@ export function createTauriClient(): PosClient {
       return listMenuManagementRows(await database());
     },
     async createMenuItem(input) {
+      requirePermission("menu");
       if (!input.name.trim())
         throw new PosClientError("validation", "Menu item name is required.");
       if (
@@ -856,6 +957,7 @@ export function createTauriClient(): PosClient {
       return item;
     },
     async updateMenuItem(input) {
+      requirePermission("menu");
       if (!input.name.trim())
         throw new PosClientError("validation", "Menu item name is required.");
       if (
@@ -906,6 +1008,7 @@ export function createTauriClient(): PosClient {
       return item;
     },
     async createMenuCategory(name) {
+      requirePermission("menu");
       if (!name.trim())
         throw new PosClientError("validation", "Category name is required.");
       const db = await database();
@@ -924,6 +1027,7 @@ export function createTauriClient(): PosClient {
       return { id, name: name.trim(), sortOrder: asNumber(next?.sortOrder) };
     },
     async updateMenuCategory(input) {
+      requirePermission("menu");
       if (!input.name.trim())
         throw new PosClientError("validation", "Category name is required.");
       const db = await database();
@@ -964,6 +1068,7 @@ export function createTauriClient(): PosClient {
       };
     },
     async createTable(input) {
+      requirePermission("tables");
       const name = input.name.trim();
       if (!name)
         throw new PosClientError("validation", "Table name is required.");
@@ -1012,6 +1117,7 @@ export function createTauriClient(): PosClient {
       };
     },
     async updateTable(input) {
+      requirePermission("tables");
       const name = input.name.trim();
       if (!name)
         throw new PosClientError("validation", "Table name is required.");
@@ -1065,6 +1171,7 @@ export function createTauriClient(): PosClient {
       )!;
     },
     async setTableReservationState(tableId, reserved) {
+      requirePermission("tables");
       const db = await database();
       const [table] = await select<Row>(
         db,
@@ -1196,7 +1303,7 @@ export function createTauriClient(): PosClient {
               asNumber(next?.nextNumber),
               input.orderType,
               input.tableId ?? null,
-              createdBy,
+              actorId(),
               now,
             ],
           );
@@ -1347,7 +1454,7 @@ export function createTauriClient(): PosClient {
         const [user] = await select<Row>(
           db,
           "SELECT id FROM users WHERE id = $1 AND business_id = $2 AND active = 1",
-          [createdBy, businessId],
+          [actorId(), businessId],
         );
         if (!user)
           throw new PosClientError(
@@ -1383,7 +1490,7 @@ export function createTauriClient(): PosClient {
               orderId,
               sequence++,
               delta.type,
-              createdBy,
+              actorId(),
               createdAt,
             ],
           );
@@ -1432,6 +1539,7 @@ export function createTauriClient(): PosClient {
       return rows.map(mapPrinter);
     },
     async savePrinter(input) {
+      requirePermission("printers");
       if (!input.name.trim() || !input.address.trim())
         throw new PosClientError(
           "validation",
@@ -1602,7 +1710,7 @@ export function createTauriClient(): PosClient {
             tendered,
             change,
             input.idempotencyKey,
-            createdBy,
+            actorId(),
             now,
           ],
         );
@@ -1667,7 +1775,7 @@ export function createTauriClient(): PosClient {
                 ),
                 JSON.stringify(snapshot),
                 now,
-                createdBy,
+                actorId(),
               ],
             );
             receiptCreated = true;
@@ -1746,6 +1854,7 @@ export function createTauriClient(): PosClient {
       }
     },
     async backupNow() {
+      requirePermission("backup");
       try {
         return await invoke<BackupInfo>("backup_now");
       } catch (cause) {
@@ -1760,6 +1869,7 @@ export function createTauriClient(): PosClient {
       }
     },
     async restoreBackup(fileName) {
+      requirePermission("backup");
       try {
         return await invoke<BackupInfo>("restore_backup", { fileName });
       } catch (cause) {
@@ -1787,6 +1897,7 @@ export function createTauriClient(): PosClient {
       return rows.map(mapStockMovement);
     },
     async createInventoryItem(input) {
+      requirePermission("inventory");
       if (!input.name.trim())
         throw new PosClientError(
           "validation",
@@ -1826,7 +1937,7 @@ export function createTauriClient(): PosClient {
               businessId,
               id,
               input.startingQuantity,
-              createdBy,
+              actorId(),
               now,
             ],
           );
@@ -1844,6 +1955,7 @@ export function createTauriClient(): PosClient {
       return (await listInventoryRows(db)).find((item) => item.id === id)!;
     },
     async updateInventoryItem(input) {
+      requirePermission("inventory");
       const db = await database();
       const [item] = await select<Row>(
         db,
@@ -1936,6 +2048,7 @@ export function createTauriClient(): PosClient {
       );
     },
     async adjustStockToCount(itemId, countedQuantity, reason) {
+      requirePermission("inventory_adjustment");
       if (!Number.isSafeInteger(countedQuantity) || countedQuantity < 0)
         throw new PosClientError(
           "validation",

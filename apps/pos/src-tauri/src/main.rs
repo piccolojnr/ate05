@@ -7,6 +7,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
+mod auth;
 mod backup;
 mod database;
 
@@ -299,6 +300,7 @@ async fn test_printer(request: PrinterRequest, created_at: String) -> Result<(),
 
 fn main() {
     tauri::Builder::default()
+        .manage(auth::AuthSession::default())
         .plugin(
             tauri_plugin_sql::Builder::default()
                 .add_migrations(
@@ -382,7 +384,15 @@ fn main() {
             list_backups,
             backup_now,
             database_health,
-            restore_backup
+            restore_backup,
+            auth::auth_bootstrap,
+            auth::setup_owner_pin,
+            auth::authenticate_user,
+            auth::current_session,
+            auth::lock_session,
+            auth::list_staff,
+            auth::create_staff,
+            auth::update_staff
         ])
         .run(tauri::generate_context!())
         .expect("error while running ATE05 POS");
@@ -421,6 +431,7 @@ async fn list_backups(app: tauri::AppHandle) -> Result<Vec<backup::BackupInfo>, 
 
 #[tauri::command]
 async fn backup_now(app: tauri::AppHandle) -> Result<backup::BackupInfo, String> {
+    auth::require_permission(&app, "backup")?;
     let pool = native_pool(&app).await?;
     let (_, backups_dir) = native_paths(&app)?;
     backup::create(&pool, &backups_dir, "manual").await
@@ -437,6 +448,7 @@ async fn restore_backup(
     app: tauri::AppHandle,
     file_name: String,
 ) -> Result<backup::BackupInfo, String> {
+    auth::require_permission(&app, "backup")?;
     let pool = native_pool(&app).await?;
     let (database_path, backups_dir) = native_paths(&app)?;
     let (new_pool, info) = backup::restore(pool, &database_path, &backups_dir, &file_name).await?;
