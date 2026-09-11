@@ -461,7 +461,7 @@ async function getActiveKitchenPrinter(
 ): Promise<PosPrinterConfig | null> {
   const [row] = await select<Row>(
     db,
-    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'kitchen' AND active = 1 ORDER BY created_at LIMIT 1",
+    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'kitchen' ORDER BY active DESC, created_at LIMIT 1",
     [businessId],
   );
   return row ? mapPrinter(row) : null;
@@ -472,10 +472,81 @@ async function getActiveReceiptPrinter(
 ): Promise<PosPrinterConfig | null> {
   const [row] = await select<Row>(
     db,
-    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'receipt' AND active = 1 ORDER BY updated_at DESC LIMIT 1",
+    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'receipt' ORDER BY active DESC, updated_at DESC LIMIT 1",
     [businessId],
   );
   return row ? mapPrinter(row) : null;
+}
+
+async function recordPrintAttempt(
+  db: SqlDatabase,
+  input: {
+    documentType: "kitchen_ticket" | "receipt";
+    documentId: string;
+    printerId: string | null;
+    context: "initial" | "retry" | "reprint";
+    attemptedAt: string;
+    success: boolean;
+    failureCategory?: string | null;
+    failureMessage?: string | null;
+  },
+): Promise<void> {
+  try {
+    await execute(
+      db,
+      "INSERT INTO print_attempts (id, business_id, document_type, document_id, printer_id, context, attempted_at, success, failure_category, failure_message) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [
+        crypto.randomUUID(),
+        businessId,
+        input.documentType,
+        input.documentId,
+        input.printerId,
+        input.context,
+        input.attemptedAt,
+        input.success ? 1 : 0,
+        input.failureCategory ?? null,
+        input.failureMessage ?? null,
+      ],
+    );
+  } catch (cause) {
+    console.error("[ATE05] print attempt history could not be saved", {
+      documentType: input.documentType,
+      documentId: input.documentId,
+      detail: errorDetail(cause),
+    });
+  }
+}
+
+function normalizePrintFailure(cause: unknown): {
+  category: string;
+  message: string;
+} {
+  const detail = errorDetail(cause);
+  const normalized = detail.toLowerCase();
+  if (normalized.includes("timeout"))
+    return { category: "timeout", message: "Printer connection timed out." };
+  if (
+    normalized.includes("invalid_configuration") ||
+    normalized.includes("invalid")
+  )
+    return {
+      category: "invalid_configuration",
+      message: "Printer configuration is invalid.",
+    };
+  if (
+    normalized.includes("connection_refused") ||
+    normalized.includes("refused")
+  )
+    return {
+      category: "connection_refused",
+      message: "Could not connect to the printer.",
+    };
+  if (normalized.includes("unsupported_transport"))
+    return {
+      category: "unsupported_transport",
+      message: "This printer connection is not supported.",
+    };
+  return { category: "write_failed", message: "Printer unavailable." };
 }
 
 function nativePrinterRequest(printer: PosPrinterConfig) {
@@ -497,6 +568,11 @@ async function attemptKitchenPrint(
 ): Promise<void> {
   if (ticket.printStatus === "printed" && !reprint) return;
   const attemptAt = timestamp();
+  const context = reprint
+    ? "reprint"
+    : ticket.printAttemptCount > 0
+      ? "retry"
+      : "initial";
   await execute(
     db,
     reprint
@@ -505,18 +581,45 @@ async function attemptKitchenPrint(
     [attemptAt, ticket.id, businessId],
   );
   if (!printer) {
+    const failure = "No kitchen printer is configured.";
     await execute(
       db,
       reprint
         ? "UPDATE kitchen_tickets SET last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4"
         : "UPDATE kitchen_tickets SET print_status = 'failed', last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4",
-      [
-        "No active kitchen printer is configured.",
-        attemptAt,
-        ticket.id,
-        businessId,
-      ],
+      [failure, attemptAt, ticket.id, businessId],
     );
+    await recordPrintAttempt(db, {
+      documentType: "kitchen_ticket",
+      documentId: ticket.id,
+      printerId: null,
+      context,
+      attemptedAt: attemptAt,
+      success: false,
+      failureCategory: "not_configured",
+      failureMessage: failure,
+    });
+    return;
+  }
+  if (!printer.active) {
+    const failure = "Kitchen printer is disabled.";
+    await execute(
+      db,
+      reprint
+        ? "UPDATE kitchen_tickets SET last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4"
+        : "UPDATE kitchen_tickets SET print_status = 'failed', last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4",
+      [failure, attemptAt, ticket.id, businessId],
+    );
+    await recordPrintAttempt(db, {
+      documentType: "kitchen_ticket",
+      documentId: ticket.id,
+      printerId: printer.id,
+      context,
+      attemptedAt: attemptAt,
+      success: false,
+      failureCategory: "disabled",
+      failureMessage: failure,
+    });
     return;
   }
   const payload = {
@@ -525,6 +628,7 @@ async function attemptKitchenPrint(
     sequence: ticket.sequence,
     ticketType: ticket.type,
     createdAt: ticket.createdAt,
+    reprint,
     items: ticket.items.map((item) => ({
       itemName: item.itemName,
       quantity: item.quantity,
@@ -544,15 +648,33 @@ async function attemptKitchenPrint(
         : "UPDATE kitchen_tickets SET print_status = 'printed', printed_at = $1, last_print_error = NULL, updated_at = $1 WHERE id = $2 AND business_id = $3",
       [attemptAt, ticket.id, businessId],
     );
+    await recordPrintAttempt(db, {
+      documentType: "kitchen_ticket",
+      documentId: ticket.id,
+      printerId: printer.id,
+      context,
+      attemptedAt: attemptAt,
+      success: true,
+    });
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
+    const failure = normalizePrintFailure(cause);
     await execute(
       db,
       reprint
         ? "UPDATE kitchen_tickets SET last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4"
         : "UPDATE kitchen_tickets SET print_status = 'failed', last_print_error = $1, updated_at = $2 WHERE id = $3 AND business_id = $4",
-      [message.slice(0, 500), attemptAt, ticket.id, businessId],
+      [failure.message, attemptAt, ticket.id, businessId],
     );
+    await recordPrintAttempt(db, {
+      documentType: "kitchen_ticket",
+      documentId: ticket.id,
+      printerId: printer.id,
+      context,
+      attemptedAt: attemptAt,
+      success: false,
+      failureCategory: failure.category,
+      failureMessage: failure.message,
+    });
   }
 }
 
@@ -562,8 +684,10 @@ async function attemptReceiptPrint(
   order: PosOrder,
   printer: PosPrinterConfig | null,
   reprint = false,
+  attemptContext: "initial" | "retry" | "reprint" = "retry",
 ): Promise<void> {
   const attemptedAt = timestamp();
+  const context = reprint ? "reprint" : attemptContext;
   await execute(
     db,
     reprint
@@ -580,7 +704,33 @@ async function attemptReceiptPrint(
       [message, receipt.id, businessId],
     );
   if (!printer) {
-    await failure("No active receipt printer is configured.");
+    const message = "No receipt printer is configured.";
+    await failure(message);
+    await recordPrintAttempt(db, {
+      documentType: "receipt",
+      documentId: receipt.id,
+      printerId: null,
+      context,
+      attemptedAt,
+      success: false,
+      failureCategory: "not_configured",
+      failureMessage: message,
+    });
+    return;
+  }
+  if (!printer.active) {
+    const message = "Receipt printer is disabled.";
+    await failure(message);
+    await recordPrintAttempt(db, {
+      documentType: "receipt",
+      documentId: receipt.id,
+      printerId: printer.id,
+      context,
+      attemptedAt,
+      success: false,
+      failureCategory: "disabled",
+      failureMessage: message,
+    });
     return;
   }
   try {
@@ -599,6 +749,7 @@ async function attemptReceiptPrint(
         })),
         subtotalMinor: order.subtotalMinor,
         totalMinor: receipt.totalMinor,
+        reprint,
         payments: receipt.payments.map((payment) => ({
           method: payment.method,
           amountMinor: payment.amountMinor,
@@ -614,8 +765,27 @@ async function attemptReceiptPrint(
         ? [receipt.id, businessId]
         : [attemptedAt, receipt.id, businessId],
     );
+    await recordPrintAttempt(db, {
+      documentType: "receipt",
+      documentId: receipt.id,
+      printerId: printer.id,
+      context,
+      attemptedAt,
+      success: true,
+    });
   } catch (cause) {
-    await failure(String(cause).slice(0, 500));
+    const normalized = normalizePrintFailure(cause);
+    await failure(normalized.message);
+    await recordPrintAttempt(db, {
+      documentType: "receipt",
+      documentId: receipt.id,
+      printerId: printer.id,
+      context,
+      attemptedAt,
+      success: false,
+      failureCategory: normalized.category,
+      failureMessage: normalized.message,
+    });
   }
 }
 async function getKitchenSyncLines(
@@ -1841,6 +2011,8 @@ export function createTauriClient(): PosClient {
           updated.receipt,
           updated,
           await getActiveReceiptPrinter(db),
+          false,
+          "initial",
         );
         return getOrder(db, input.orderId);
       }

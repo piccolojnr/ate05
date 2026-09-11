@@ -64,6 +64,14 @@ impl MigrationSource<'static> for Ate05Migrations {
                     .into(),
                     false,
                 ),
+                Migration::new(
+                    4,
+                    "print_attempts_v1".into(),
+                    MigrationType::ReversibleUp,
+                    include_str!("../../../../packages/database/drizzle/0003_classy_thundra.sql")
+                        .into(),
+                    false,
+                ),
             ])
         })
     }

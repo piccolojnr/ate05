@@ -29,6 +29,8 @@ struct KitchenTicketRequest {
     sequence: u32,
     ticket_type: String,
     created_at: String,
+    #[serde(default)]
+    reprint: bool,
     items: Vec<KitchenTicketItemRequest>,
 }
 
@@ -52,6 +54,8 @@ struct ReceiptRequest {
     items: Vec<ReceiptItemRequest>,
     subtotal_minor: i64,
     total_minor: i64,
+    #[serde(default)]
+    reprint: bool,
     payments: Vec<ReceiptPaymentRequest>,
 }
 #[derive(Debug, Deserialize)]
@@ -110,6 +114,9 @@ fn ticket_text(ticket: &KitchenTicketRequest, paper_width: u16) -> String {
         title.into(),
         separator('-'),
     ];
+    if ticket.reprint {
+        lines.insert(lines.len() - 1, "*** REPRINT ***".into());
+    }
     for item in &ticket.items {
         let prefix = if item.action == "cancel" { "* " } else { "+ " };
         lines.push(format!(
@@ -162,6 +169,9 @@ fn receipt_text(receipt: &ReceiptRequest, paper_width: u16) -> String {
         ),
         separator.clone(),
     ];
+    if receipt.reprint {
+        lines.insert(2, "REPRINT".into());
+    }
     for item in &receipt.items {
         lines.push(line_fit(
             &format!("{} x {}", item.quantity, item.name),
@@ -242,20 +252,32 @@ fn send_tcp(request: &PrinterRequest, bytes: &[u8]) -> Result<(), String> {
         .map_err(|_| "invalid_configuration: printer address is invalid".to_string())?
         .next()
         .ok_or_else(|| "invalid_configuration: printer address is invalid".to_string())?;
-    let mut stream =
-        TcpStream::connect_timeout(&socket, Duration::from_secs(5)).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::TimedOut {
-                "timeout: printer connection timed out".to_string()
-            } else {
-                format!("connection_refused: {}", error)
-            }
-        })?;
+    let mut stream = TcpStream::connect_timeout(&socket, Duration::from_secs(5))
+        .map_err(|error| normalize_socket_error("connection", &error))?;
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
         .map_err(|error| format!("write_failed: {}", error))?;
     stream
         .write_all(bytes)
-        .map_err(|error| format!("write_failed: {}", error))
+        .map_err(|error| normalize_socket_error("write", &error))
+}
+
+fn normalize_socket_error(stage: &str, error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::TimedOut {
+        return format!("timeout: printer {stage} timed out");
+    }
+    if stage == "connection"
+        && matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::NotConnected
+        )
+    {
+        return format!("connection_refused: could not connect to printer ({error})");
+    }
+    format!("write_failed: printer {stage} failed ({error})")
 }
 
 #[tauri::command]
@@ -281,6 +303,7 @@ async fn test_printer(request: PrinterRequest, created_at: String) -> Result<(),
         sequence: 1,
         ticket_type: "initial".into(),
         created_at,
+        reprint: false,
         items: vec![KitchenTicketItemRequest {
             item_name: "KITCHEN PRINTER TEST".into(),
             quantity: 1,
@@ -327,6 +350,14 @@ fn main() {
                             description: "payment_receipt_v1",
                             sql: include_str!(
                                 "../../../../packages/database/drizzle/0002_lovely_ghost_rider.sql"
+                            ),
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 4,
+                            description: "print_attempts_v1",
+                            sql: include_str!(
+                                "../../../../packages/database/drizzle/0003_classy_thundra.sql"
                             ),
                             kind: MigrationKind::Up,
                         },
@@ -467,4 +498,43 @@ async fn restore_backup(
         pool.close().await;
     }
     Ok(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_transport_failures_without_exposing_unbounded_details() {
+        let refused =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
+        assert!(normalize_socket_error("connection", &refused).starts_with("connection_refused:"));
+        let timeout = std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out");
+        assert_eq!(
+            normalize_socket_error("connection", &timeout),
+            "timeout: printer connection timed out"
+        );
+    }
+
+    #[test]
+    fn reprints_are_visibly_marked_without_changing_document_numbers() {
+        let ticket = KitchenTicketRequest {
+            order_number: 142,
+            table_name: Some("Table 4".into()),
+            sequence: 2,
+            ticket_type: "addition".into(),
+            created_at: "09 Sep 2026 20:15".into(),
+            reprint: true,
+            items: vec![KitchenTicketItemRequest {
+                item_name: "Chicken Wings".into(),
+                quantity: 1,
+                action: "add".into(),
+                notes: None,
+            }],
+        };
+        let text = ticket_text(&ticket, 80);
+        assert!(text.contains("REPRINT"));
+        assert!(text.contains("ORDER #0142"));
+        assert!(text.contains("TICKET 2"));
+    }
 }

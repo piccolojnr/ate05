@@ -5,9 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const CURRENT_SCHEMA_VERSION: i64 = 4;
 const AUTOMATIC_RETENTION: usize = 14;
-const EXPECTED_TABLES: [&str; 15] = [
+const EXPECTED_TABLES: [&str; 16] = [
     "businesses",
     "users",
     "menu_categories",
@@ -23,6 +23,7 @@ const EXPECTED_TABLES: [&str; 15] = [
     "stock_movements",
     "printers",
     "app_metadata",
+    "print_attempts",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,6 +147,7 @@ pub async fn validate(path: &Path) -> Result<BackupInfo, String> {
         if !foreign_key_errors.is_empty() {
             return Err("invalid_backup: foreign-key check found inconsistent records".into());
         }
+        let version = schema_version(&pool).await?;
         for table in EXPECTED_TABLES {
             let exists: Option<i64> = sqlx::query_scalar(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
@@ -155,12 +157,14 @@ pub async fn validate(path: &Path) -> Result<BackupInfo, String> {
             .await
             .map_err(|error| format!("invalid_backup: schema check failed ({error})"))?;
             if exists.is_none() {
+                if table == "print_attempts" && version < CURRENT_SCHEMA_VERSION {
+                    continue;
+                }
                 return Err(format!(
                     "invalid_backup: backup is missing required table {table}"
                 ));
             }
         }
-        let version = schema_version(&pool).await?;
         if version > CURRENT_SCHEMA_VERSION {
             return Err(
                 "incompatible_schema: this backup was created by a newer version of ATE05".into(),
@@ -381,7 +385,7 @@ mod tests {
                 .await
                 .unwrap();
             assert!(info.valid);
-            assert_eq!(info.schema_version, 3);
+            assert_eq!(info.schema_version, 4);
             let backup_path = root.join("backups").join(info.file_name);
             let backup_pool = database::connect(&backup_path).await.unwrap();
             let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM businesses")

@@ -151,6 +151,38 @@ describe("ATE05 SQLite database", () => {
     });
   });
 
+  it("stores durable print-attempt history without weakening business scoping", () => {
+    database.sqlite
+      .prepare(
+        "INSERT INTO print_attempts (id, business_id, document_type, document_id, printer_id, context, attempted_at, success, failure_category, failure_message) VALUES (?, ?, 'kitchen_ticket', ?, NULL, 'retry', ?, 0, 'timeout', 'Printer connection timed out.')",
+      )
+      .run(
+        "00000000-0000-4000-8000-000000000116",
+        developmentSeedIds.business,
+        "00000000-0000-4000-8000-000000000117",
+        timestamp,
+      );
+    expect(
+      database.sqlite
+        .prepare(
+          "SELECT document_type, context, success, failure_category FROM print_attempts WHERE business_id = ?",
+        )
+        .get(developmentSeedIds.business),
+    ).toEqual({
+      document_type: "kitchen_ticket",
+      context: "retry",
+      success: 0,
+      failure_category: "timeout",
+    });
+    expect(() =>
+      database.sqlite
+        .prepare(
+          "INSERT INTO print_attempts (id, business_id, document_type, document_id, context, attempted_at, success) VALUES (?, 'missing-business', 'receipt', 'missing', 'initial', ?, 1)",
+        )
+        .run("00000000-0000-4000-8000-000000000118", timestamp),
+    ).toThrow();
+  });
+
   it("associates independent payment records with an order", () => {
     const orderId = insertOrder();
     database.sqlite
