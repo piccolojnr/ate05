@@ -33,6 +33,10 @@ function StaffSection({
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editPin, setEditPin] = useState("");
+  const [editName, setEditName] = useState("");
+  const [editRole, setEditRole] = useState("cashier");
   async function create(event: FormEvent) {
     event.preventDefault();
     setError("");
@@ -106,7 +110,7 @@ function StaffSection({
             aria-label="New staff PIN"
           />
         </label>
-        <Button className="self-end" disabled={working}>
+        <Button type="submit" className="self-end" disabled={working}>
           {working ? "Adding…" : "Add staff"}
         </Button>
       </form>
@@ -117,29 +121,120 @@ function StaffSection({
       ) : null}
       <div className="mt-5 divide-y border-t">
         {staff.map((user) => (
-          <div
-            className="flex flex-wrap items-center justify-between gap-3 py-3"
-            key={user.id}
-          >
-            <div>
-              <p className="font-semibold">{user.name}</p>
-              <p className="text-xs text-muted-foreground">
-                {user.role} · {user.active ? "Active" : "Inactive"}
-              </p>
+          <div className="py-4" key={user.id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex size-10 items-center justify-center rounded-full bg-primary/10 text-sm font-black text-primary">
+                  {user.name.slice(0, 1).toUpperCase()}
+                </div>
+                <div>
+                  <p className="font-semibold">{user.name}</p>
+                  <p className="text-xs capitalize text-muted-foreground">
+                    {user.role} · {user.active ? "Active" : "Inactive"} · PIN
+                    protected
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setEditingId(editingId === user.id ? null : user.id);
+                    setEditName(user.name);
+                    setEditRole(user.role);
+                    setEditPin("");
+                  }}
+                >
+                  {editingId === user.id ? "Close" : "Edit"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() =>
+                    void onUpdate({
+                      userId: user.id,
+                      name: user.name,
+                      role: user.role,
+                      active: !user.active,
+                    })
+                  }
+                >
+                  {user.active ? "Deactivate" : "Reactivate"}
+                </Button>
+              </div>
             </div>
-            <Button
-              variant="secondary"
-              onClick={() =>
-                void onUpdate({
-                  userId: user.id,
-                  name: user.name,
-                  role: user.role,
-                  active: !user.active,
-                })
-              }
-            >
-              {user.active ? "Deactivate" : "Reactivate"}
-            </Button>
+            {editingId === user.id ? (
+              <form
+                className="mt-4 grid gap-3 rounded-lg bg-muted/40 p-3 sm:grid-cols-[1.4fr_1fr_1fr_auto]"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (editPin && !/^\d{4,6}$/.test(editPin)) {
+                    setError("PIN must be 4–6 digits.");
+                    return;
+                  }
+                  void onUpdate({
+                    userId: user.id,
+                    name: editName,
+                    role: editRole,
+                    active: user.active,
+                    pin: editPin || undefined,
+                  })
+                    .then(() => {
+                      setEditingId(null);
+                      setEditPin("");
+                    })
+                    .catch((cause) =>
+                      setError(
+                        cause instanceof Error
+                          ? cause.message
+                          : "Unable to update staff member.",
+                      ),
+                    );
+                }}
+              >
+                <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                  Name
+                  <Input
+                    className="mt-1"
+                    value={editName}
+                    onChange={(event) => setEditName(event.target.value)}
+                  />
+                </label>
+                <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                  Role
+                  <Select
+                    className="mt-1 min-h-10"
+                    value={editRole}
+                    onChange={(event) => setEditRole(event.target.value)}
+                  >
+                    <option value="cashier">Cashier</option>
+                    <option value="manager">Manager</option>
+                    <option value="kitchen">Kitchen</option>
+                    <option value="inventory">Inventory</option>
+                    <option value="waiter">Waiter</option>
+                  </Select>
+                </label>
+                <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                  New PIN
+                  <Input
+                    className="mt-1"
+                    type="password"
+                    inputMode="numeric"
+                    placeholder="Leave unchanged"
+                    value={editPin}
+                    onChange={(event) =>
+                      setEditPin(
+                        event.target.value.replace(/\D/g, "").slice(0, 6),
+                      )
+                    }
+                  />
+                </label>
+                <Button type="submit" className="self-end">
+                  Save
+                </Button>
+              </form>
+            ) : null}
           </div>
         ))}
       </div>
@@ -403,6 +498,9 @@ export function SettingsScreen({
   const [backupState, setBackupState] = useState<"idle" | "working">("idle");
   const [selectedBackup, setSelectedBackup] = useState("");
   const [confirmRestore, setConfirmRestore] = useState(false);
+  const [activeTab, setActiveTab] = useState<"staff" | "printers" | "data">(
+    "staff",
+  );
   const native = isTauriRuntime(window);
   const latestAutomatic = backups.find((backup) => backup.kind === "automatic");
   const latestManual = backups.find((backup) => backup.kind === "manual");
@@ -439,186 +537,235 @@ export function SettingsScreen({
     <div className="flex min-h-0 flex-col gap-5">
       <PageHeader
         title="Settings"
-        description="Configure printers and operational printing."
+        description="Keep your restaurant, team, and local operations ready."
       />
-      <div className="grid gap-5 xl:grid-cols-2">
-        <PrinterSettingsCard
-          role="kitchen"
-          printer={printers.find((printer) => printer.role === "kitchen")}
-          onSave={onSavePrinter}
-          onTest={onTestPrinter}
-        />
-        <PrinterSettingsCard
-          role="receipt"
-          printer={printers.find((printer) => printer.role === "receipt")}
-          onSave={onSavePrinter}
-          onTest={onTestPrinter}
-        />
-      </div>
-      <Card className="p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-primary">
-              Print issues
-            </p>
-            <h2 className="mt-1 text-lg font-black">Retry saved print jobs</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Retry pending kitchen tickets or customer receipts without
-              creating new business records.
-            </p>
-          </div>
-          <Badge tone="neutral">Native and preview supported</Badge>
-        </div>
-        <div className="mt-5 flex flex-wrap gap-3 border-t pt-4">
-          <Button variant="secondary" onClick={() => void onRetryPrints()}>
-            Retry kitchen prints
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void onRetryReceiptPrints()}
+      <nav
+        aria-label="Settings sections"
+        className="flex gap-2 overflow-x-auto border-b pb-1"
+      >
+        {(
+          [
+            ["staff", "Staff accounts", "Access and roles"],
+            ["printers", "Printers", "Receipts and kitchen"],
+            ["data", "Data & backup", "Protect local records"],
+          ] as const
+        ).map(([id, label, hint]) => (
+          <button
+            key={id}
+            type="button"
+            aria-current={activeTab === id ? "page" : undefined}
+            onClick={() => setActiveTab(id)}
+            className={`min-w-max rounded-t-lg px-4 py-3 text-left transition-colors ${activeTab === id ? "border-b-2 border-primary bg-primary/5 text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}
           >
-            Retry receipt prints
-          </Button>
-        </div>
-      </Card>
-      <StaffSection
-        staff={staff}
-        onCreate={onCreateStaff}
-        onUpdate={onUpdateStaff}
-      />
-      <Card className="p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-primary">
-              Data &amp; backup
-            </p>
-            <h2 className="mt-1 text-lg font-black">
-              Protect local restaurant data
-            </h2>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Daily backups are kept on this computer. Before restoring, ATE05
-              creates a safety copy of the current database.
-            </p>
+            <span className="block text-sm font-bold">{label}</span>
+            <span className="block text-xs">{hint}</span>
+          </button>
+        ))}
+      </nav>
+      {activeTab === "printers" ? (
+        <>
+          <div className="grid gap-5 xl:grid-cols-2">
+            <PrinterSettingsCard
+              role="kitchen"
+              printer={printers.find((printer) => printer.role === "kitchen")}
+              onSave={onSavePrinter}
+              onTest={onTestPrinter}
+            />
+            <PrinterSettingsCard
+              role="receipt"
+              printer={printers.find((printer) => printer.role === "receipt")}
+              onSave={onSavePrinter}
+              onTest={onTestPrinter}
+            />
           </div>
-          <Badge
-            tone={
-              native
-                ? databaseHealth?.healthy
-                  ? "success"
-                  : "warning"
-                : "neutral"
-            }
-          >
-            {native
-              ? databaseHealth?.healthy
-                ? "Database healthy"
-                : "Health check unavailable"
-              : "Browser preview"}
-          </Badge>
-        </div>
-        <div className="mt-5 grid gap-3 border-y py-4 text-sm sm:grid-cols-2">
-          <div>
-            <p className="text-muted-foreground">Last automatic backup</p>
-            <p className="mt-1 font-semibold">
-              {formatBackupDate(latestAutomatic)}
-            </p>
-          </div>
-          <div>
-            <p className="text-muted-foreground">Last manual backup</p>
-            <p className="mt-1 font-semibold">
-              {formatBackupDate(latestManual)}
-            </p>
-          </div>
-        </div>
-        {!native ? (
-          <p className="mt-4 rounded-md bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
-            Backup and restore are available in the native desktop app. Browser
-            preview uses simulated local state and does not create SQLite files.
-          </p>
-        ) : null}
-        <div className="mt-5 flex flex-wrap items-end gap-3">
-          <Button
-            disabled={!native || backupState === "working"}
-            onClick={() => void createBackup()}
-          >
-            {backupState === "working" ? "Working…" : "Back Up Now"}
-          </Button>
-          <Button
-            variant="secondary"
-            disabled={!native || backupState === "working"}
-            onClick={() => void onExportBackup()}
-          >
-            Export Backup
-          </Button>
-          {native && backups.length ? (
-            <label className="min-w-64 text-sm font-semibold">
-              Restore from backup
-              <Select
-                aria-label="Restore from backup"
-                className="mt-1 min-h-11 font-normal"
-                value={selectedBackup}
-                onChange={(event) => {
-                  setSelectedBackup(event.target.value);
-                  setConfirmRestore(false);
-                }}
-              >
-                <option value="">Choose a validated backup</option>
-                {backups.map((backup) => (
-                  <option key={backup.fileName} value={backup.fileName}>
-                    {backup.kind.replace("_", " ")} · {formatBackupDate(backup)}
-                  </option>
-                ))}
-              </Select>
-            </label>
-          ) : null}
-          {native && selectedBackup && !confirmRestore ? (
-            <Button variant="secondary" onClick={() => setConfirmRestore(true)}>
-              Restore selected backup
-            </Button>
-          ) : null}
-        </div>
-        {confirmRestore ? (
-          <div className="mt-4 rounded-md border border-warning/30 bg-warning/10 p-4">
-            <p className="font-bold">Replace current local data?</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              A safety backup will be created first. The selected backup will
-              replace the current database and the application data will reload.
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
+          <Card className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">
+                  Print issues
+                </p>
+                <h2 className="mt-1 text-lg font-black">
+                  Retry saved print jobs
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Retry pending kitchen tickets or customer receipts without
+                  creating new business records.
+                </p>
+              </div>
+              <Badge tone="neutral">Native and preview supported</Badge>
+            </div>
+            <div className="mt-5 flex flex-wrap gap-3 border-t pt-4">
+              <Button variant="secondary" onClick={() => void onRetryPrints()}>
+                Retry kitchen prints
+              </Button>
               <Button
                 variant="secondary"
-                onClick={() => setConfirmRestore(false)}
+                onClick={() => void onRetryReceiptPrints()}
               >
-                Cancel
-              </Button>
-              <Button
-                disabled={backupState === "working"}
-                onClick={() => void restore()}
-              >
-                {backupState === "working" ? "Restoring…" : "Confirm restore"}
+                Retry receipt prints
               </Button>
             </div>
-          </div>
-        ) : null}
-      </Card>
-      <Card className="p-5">
-        <p className="text-xs font-bold uppercase tracking-wider text-primary">
-          Application mode
-        </p>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="font-black">
-              {isTauriRuntime(window) ? "Native desktop" : "Browser preview"}
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {isTauriRuntime(window)
-                ? "Physical printer communication is available."
-                : "Preview printing is simulated; no physical printer is contacted."}
+          </Card>
+        </>
+      ) : null}
+      {activeTab === "staff" ? (
+        <>
+          <StaffSection
+            staff={staff}
+            onCreate={onCreateStaff}
+            onUpdate={onUpdateStaff}
+          />
+        </>
+      ) : null}
+      {activeTab === "data" ? (
+        <>
+          <Card className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">
+                  Data &amp; backup
+                </p>
+                <h2 className="mt-1 text-lg font-black">
+                  Protect local restaurant data
+                </h2>
+                <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                  Daily backups are kept on this computer. Before restoring,
+                  ATE05 creates a safety copy of the current database.
+                </p>
+              </div>
+              <Badge
+                tone={
+                  native
+                    ? databaseHealth?.healthy
+                      ? "success"
+                      : "warning"
+                    : "neutral"
+                }
+              >
+                {native
+                  ? databaseHealth?.healthy
+                    ? "Database healthy"
+                    : "Health check unavailable"
+                  : "Browser preview"}
+              </Badge>
+            </div>
+            <div className="mt-5 grid gap-3 border-y py-4 text-sm sm:grid-cols-2">
+              <div>
+                <p className="text-muted-foreground">Last automatic backup</p>
+                <p className="mt-1 font-semibold">
+                  {formatBackupDate(latestAutomatic)}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Last manual backup</p>
+                <p className="mt-1 font-semibold">
+                  {formatBackupDate(latestManual)}
+                </p>
+              </div>
+            </div>
+            {!native ? (
+              <p className="mt-4 rounded-md bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+                Backup and restore are available in the native desktop app.
+                Browser preview uses simulated local state and does not create
+                SQLite files.
+              </p>
+            ) : null}
+            <div className="mt-5 flex flex-wrap items-end gap-3">
+              <Button
+                disabled={!native || backupState === "working"}
+                onClick={() => void createBackup()}
+              >
+                {backupState === "working" ? "Working…" : "Back Up Now"}
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={!native || backupState === "working"}
+                onClick={() => void onExportBackup()}
+              >
+                Export Backup
+              </Button>
+              {native && backups.length ? (
+                <label className="min-w-64 text-sm font-semibold">
+                  Restore from backup
+                  <Select
+                    aria-label="Restore from backup"
+                    className="mt-1 min-h-11 font-normal"
+                    value={selectedBackup}
+                    onChange={(event) => {
+                      setSelectedBackup(event.target.value);
+                      setConfirmRestore(false);
+                    }}
+                  >
+                    <option value="">Choose a validated backup</option>
+                    {backups.map((backup) => (
+                      <option key={backup.fileName} value={backup.fileName}>
+                        {backup.kind.replace("_", " ")} ·{" "}
+                        {formatBackupDate(backup)}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              ) : null}
+              {native && selectedBackup && !confirmRestore ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => setConfirmRestore(true)}
+                >
+                  Restore selected backup
+                </Button>
+              ) : null}
+            </div>
+            {confirmRestore ? (
+              <div className="mt-4 rounded-md border border-warning/30 bg-warning/10 p-4">
+                <p className="font-bold">Replace current local data?</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  A safety backup will be created first. The selected backup
+                  will replace the current database and the application data
+                  will reload.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => setConfirmRestore(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    disabled={backupState === "working"}
+                    onClick={() => void restore()}
+                  >
+                    {backupState === "working"
+                      ? "Restoring…"
+                      : "Confirm restore"}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </Card>
+          <Card className="p-5">
+            <p className="text-xs font-bold uppercase tracking-wider text-primary">
+              Application mode
             </p>
-          </div>
-          <StatusBadge value={isTauriRuntime(window) ? "active" : "pending"} />
-        </div>
-      </Card>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-black">
+                  {isTauriRuntime(window)
+                    ? "Native desktop"
+                    : "Browser preview"}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {isTauriRuntime(window)
+                    ? "Physical printer communication is available."
+                    : "Preview printing is simulated; no physical printer is contacted."}
+                </p>
+              </div>
+              <StatusBadge
+                value={isTauriRuntime(window) ? "active" : "pending"}
+              />
+            </div>
+          </Card>
+        </>
+      ) : null}
     </div>
   );
 }

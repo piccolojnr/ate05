@@ -26,6 +26,7 @@ const storageKey = "ate05-pos-browser-preview-v1";
 const businessId = "00000000-0000-4000-8000-000000000001";
 const createdBy = "00000000-0000-4000-8000-000000000002";
 const rememberedStaffKey = "ate05-pos-browser-remembered-staff-v1";
+const staffKey = "ate05-pos-browser-staff-v1";
 
 interface PreviewState {
   nextOrderNumber: number;
@@ -231,7 +232,7 @@ function updateKitchenPending(order: PosOrder): PosOrder {
 export function createBrowserPreviewClient(): PosClient {
   let session: SessionUser | null = null;
   let ownerPin = "2468";
-  const previewUsers = [
+  const defaultUsers: AuthUser[] = [
     {
       id: createdBy,
       name: "ATE05 Owner",
@@ -247,6 +248,34 @@ export function createBrowserPreviewClient(): PosClient {
       hasPin: true,
     },
   ];
+  type StoredStaff = AuthUser & { pin: string };
+  const previewUsers: StoredStaff[] = (() => {
+    try {
+      const stored = window.localStorage.getItem(staffKey);
+      if (stored) return JSON.parse(stored) as StoredStaff[];
+    } catch {
+      // Continue with development accounts when preview storage is unavailable.
+    }
+    return defaultUsers.map((user) => ({
+      ...user,
+      pin: user.role === "owner" ? ownerPin : "1357",
+    }));
+  })();
+  const persistStaff = () => {
+    try {
+      window.localStorage.setItem(staffKey, JSON.stringify(previewUsers));
+    } catch {
+      // Current-session changes remain usable when storage is unavailable.
+    }
+  };
+  const publicStaff = (): AuthUser[] =>
+    previewUsers.map(({ id, name, role, active, hasPin }) => ({
+      id,
+      name,
+      role,
+      active,
+      hasPin,
+    }));
   const previewPermissions = (role: string) =>
     role === "owner"
       ? [
@@ -305,7 +334,7 @@ export function createBrowserPreviewClient(): PosClient {
   return {
     async authBootstrap(): Promise<AuthBootstrap> {
       return {
-        users: previewUsers,
+        users: publicStaff(),
         requiresOwnerPin: false,
         setupRequired: false,
         businessName: "ATE05",
@@ -319,6 +348,9 @@ export function createBrowserPreviewClient(): PosClient {
     async setupOwnerPin(_userId, pin) {
       if (!/^\d{4,6}$/.test(pin)) throw new Error("PIN must be 4 to 6 digits.");
       ownerPin = pin;
+      const owner = previewUsers.find((user) => user.role === "owner");
+      if (owner) owner.pin = pin;
+      persistStaff();
     },
     async saveSetupProgress() {},
     async completeFirstRunSetup(input) {
@@ -330,10 +362,7 @@ export function createBrowserPreviewClient(): PosClient {
     },
     async authenticateUser(userId, pin) {
       const user = previewUsers.find((entry) => entry.id === userId);
-      const valid =
-        user &&
-        ((user.role === "owner" && pin === ownerPin) ||
-          (user.role === "cashier" && pin === "1357"));
+      const valid = user && pin === user.pin;
       if (!user?.active)
         throw new PosClientError("inactive_staff", "This account is inactive.");
       if (!valid) throw new PosClientError("invalid_pin", "Incorrect PIN.");
@@ -378,22 +407,30 @@ export function createBrowserPreviewClient(): PosClient {
         throw new Error(
           "Staff management is available to administrators only.",
         );
-      return previewUsers;
+      return publicStaff();
     },
     async createStaff(name, role, pin) {
       if (!session?.permissions.includes("staff"))
         throw new Error("You do not have permission to perform this action.");
       if (!name.trim()) throw new Error("Staff name is required.");
       if (!/^\d{4,6}$/.test(pin)) throw new Error("PIN must be 4 to 6 digits.");
-      const user: AuthUser = {
+      const user: StoredStaff = {
         id: crypto.randomUUID(),
         name: name.trim(),
         role,
         active: true,
         hasPin: true,
+        pin,
       };
       previewUsers.push(user);
-      return user;
+      persistStaff();
+      return {
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        active: user.active,
+        hasPin: user.hasPin,
+      };
     },
     async updateStaff(input) {
       if (!session?.permissions.includes("staff"))
@@ -403,6 +440,12 @@ export function createBrowserPreviewClient(): PosClient {
       user.name = input.name.trim();
       user.role = input.role;
       user.active = input.active;
+      if (input.pin !== undefined) {
+        if (!/^\d{4,6}$/.test(input.pin))
+          throw new Error("PIN must be 4 to 6 digits.");
+        user.pin = input.pin;
+      }
+      persistStaff();
     },
     async bootstrap(): Promise<PosBootstrap> {
       const state = readState();
