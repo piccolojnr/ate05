@@ -1,12 +1,14 @@
-import { useState, type ComponentProps, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Badge, Button, Card, Checkbox, Input, Select } from "@ate05/ui";
 import { PageHeader } from "../../components/page-header";
 import { StatusBadge } from "../../components/status-badge";
 import { isTauriRuntime } from "../../lib/get-pos-client";
+import { PrinterSetupWizard } from "./printer-setup-wizard";
 import type {
   BackupInfo,
   DatabaseHealth,
   AuthUser,
+  PosClient,
   PosPrinterConfig,
 } from "../../lib/pos-client";
 
@@ -242,7 +244,8 @@ function StaffSection({
   );
 }
 
-function PrinterSettingsCard({
+/** @deprecated Use PrinterSetupWizard for all printer configuration. */
+export function PrinterSettingsCard({
   role,
   printer,
   onSave,
@@ -260,7 +263,7 @@ function PrinterSettingsCard({
     paperWidth: 58 | 80;
     cutterEnabled: boolean;
     active: boolean;
-  }) => Promise<void>;
+  }) => Promise<PosPrinterConfig>;
   onTest: (id: string) => Promise<void>;
 }) {
   const [name, setName] = useState(
@@ -458,6 +461,80 @@ function PrinterSettingsCard({
   );
 }
 
+function PrinterOverviewCard({
+  role,
+  printer,
+  onEdit,
+  onTest,
+}: {
+  role: PrinterRole;
+  printer?: PosPrinterConfig;
+  onEdit: () => void;
+  onTest: () => void;
+}) {
+  const title = role === "kitchen" ? "Kitchen printer" : "Receipt printer";
+  return (
+    <Card className="p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wider text-primary">
+            {role === "kitchen" ? "Kitchen tickets" : "Customer receipts"}
+          </p>
+          <h2 className="mt-1 text-lg font-black">{title}</h2>
+        </div>
+        <Badge
+          tone={printer ? (printer.active ? "success" : "neutral") : "warning"}
+        >
+          {printer
+            ? printer.active
+              ? "Configured · Enabled"
+              : "Disabled"
+            : "Not configured"}
+        </Badge>
+      </div>
+      {printer ? (
+        <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3 border-y py-4 text-sm">
+          <div>
+            <dt className="text-muted-foreground">Name</dt>
+            <dd className="font-semibold">{printer.name}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Connection</dt>
+            <dd className="font-semibold capitalize">
+              {printer.connectionType}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Paper</dt>
+            <dd className="font-semibold">{printer.paperWidth} mm</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Address</dt>
+            <dd className="truncate font-semibold">{printer.address}</dd>
+          </div>
+        </dl>
+      ) : (
+        <p className="mt-5 border-y py-4 text-sm text-muted-foreground">
+          No printer is assigned to this purpose yet.
+        </p>
+      )}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button type="button" onClick={onEdit}>
+          {printer ? "Edit setup" : "Set up"}
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={!printer || !printer.active}
+          onClick={onTest}
+        >
+          Test print
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 export function SettingsScreen({
   printers,
   onSavePrinter,
@@ -475,8 +552,8 @@ export function SettingsScreen({
 }: {
   printers: PosPrinterConfig[];
   onSavePrinter: (
-    input: Parameters<PrinterSettingsCardProps["onSave"]>[0],
-  ) => Promise<void>;
+    input: Parameters<PosClient["savePrinter"]>[0],
+  ) => Promise<PosPrinterConfig>;
   onTestPrinter: (printerId: string) => Promise<void>;
   onRetryPrints: () => Promise<void>;
   onRetryReceiptPrints: () => Promise<void>;
@@ -499,8 +576,11 @@ export function SettingsScreen({
   const [selectedBackup, setSelectedBackup] = useState("");
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [activeTab, setActiveTab] = useState<"staff" | "printers" | "data">(
-    "staff",
+    "printers",
   );
+  const [wizardPrinter, setWizardPrinter] = useState<
+    PosPrinterConfig | null | undefined
+  >(undefined);
   const native = isTauriRuntime(window);
   const latestAutomatic = backups.find((backup) => backup.kind === "automatic");
   const latestManual = backups.find((backup) => backup.kind === "manual");
@@ -564,18 +644,58 @@ export function SettingsScreen({
       </nav>
       {activeTab === "printers" ? (
         <>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/20 p-4">
+            <div>
+              <p className="font-black">Printers and devices</p>
+              <p className="text-sm text-muted-foreground">
+                Set up where receipts and kitchen tickets should go.
+              </p>
+            </div>
+            <Button type="button" onClick={() => setWizardPrinter(null)}>
+              Add printer
+            </Button>
+          </div>
+          {wizardPrinter !== undefined ? (
+            <PrinterSetupWizard
+              printer={wizardPrinter ?? undefined}
+              native={native}
+              onSave={onSavePrinter}
+              onTest={onTestPrinter}
+              onClose={() => setWizardPrinter(undefined)}
+            />
+          ) : null}
           <div className="grid gap-5 xl:grid-cols-2">
-            <PrinterSettingsCard
+            <PrinterOverviewCard
               role="kitchen"
               printer={printers.find((printer) => printer.role === "kitchen")}
-              onSave={onSavePrinter}
-              onTest={onTestPrinter}
+              onEdit={() =>
+                setWizardPrinter(
+                  printers.find((printer) => printer.role === "kitchen") ??
+                    null,
+                )
+              }
+              onTest={() => {
+                const printer = printers.find(
+                  (entry) => entry.role === "kitchen",
+                );
+                if (printer) void onTestPrinter(printer.id);
+              }}
             />
-            <PrinterSettingsCard
+            <PrinterOverviewCard
               role="receipt"
               printer={printers.find((printer) => printer.role === "receipt")}
-              onSave={onSavePrinter}
-              onTest={onTestPrinter}
+              onEdit={() =>
+                setWizardPrinter(
+                  printers.find((printer) => printer.role === "receipt") ??
+                    null,
+                )
+              }
+              onTest={() => {
+                const printer = printers.find(
+                  (entry) => entry.role === "receipt",
+                );
+                if (printer) void onTestPrinter(printer.id);
+              }}
             />
           </div>
           <Card className="p-5">
@@ -769,5 +889,3 @@ export function SettingsScreen({
     </div>
   );
 }
-
-type PrinterSettingsCardProps = ComponentProps<typeof PrinterSettingsCard>;

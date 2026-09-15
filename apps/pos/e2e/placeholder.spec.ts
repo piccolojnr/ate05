@@ -215,36 +215,47 @@ test("operator can configure independent kitchen and receipt printers", async ({
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await expect(page.getByText("Not configured").first()).toBeVisible();
 
-  await page.getByLabel("Kitchen Printer name").fill("Kitchen TCP");
-  await page.getByLabel("Kitchen Printer address").fill("kitchen.local");
-  await page.getByRole("button", { name: "Save changes" }).nth(0).click();
-  await expect(page.getByText("Configured · Enabled").first()).toBeVisible();
-  await page.getByRole("button", { name: "Test print" }).nth(0).click();
+  await page.getByRole("button", { name: "Add printer" }).first().click();
+  await page.getByRole("button", { name: "Enter manually" }).click();
+  await page.getByLabel("Friendly name").fill("Kitchen TCP");
+  await page.getByLabel("Address or device name").fill("kitchen.local");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Kitchen tickets" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Review test" }).click();
+  await page.getByRole("button", { name: "Print test page" }).click();
   await expect(
     page.getByText(
       "Preview test succeeded. No physical printer was contacted.",
     ),
   ).toBeVisible();
 
-  await page.getByLabel("Receipt Printer name").fill("Receipt TCP");
-  await page.getByLabel("Receipt Printer address").fill("receipt.local");
-  await page.getByRole("button", { name: "Save changes" }).nth(1).click();
-  await expect(page.getByText("Configured · Enabled").nth(1)).toBeVisible();
+  await page.getByRole("button", { name: "Save & finish" }).click();
+  await page.getByRole("button", { name: "Add printer" }).first().click();
+  await page.getByRole("button", { name: "Enter manually" }).click();
+  await page.getByLabel("Friendly name").fill("Receipt TCP");
+  await page.getByLabel("Address or device name").fill("receipt.local");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Customer receipts" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Review test" }).click();
+  await page.getByRole("button", { name: "Print test page" }).click();
+  await page.getByRole("button", { name: "Save & finish" }).click();
   await page.reload();
   await signIn(page);
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByLabel("Kitchen Printer address")).toHaveValue(
-    "kitchen.local",
-  );
-  await expect(page.getByLabel("Receipt Printer address")).toHaveValue(
-    "receipt.local",
-  );
+  await expect(page.getByText("Kitchen TCP")).toBeVisible();
+  await expect(page.getByText("Receipt TCP")).toBeVisible();
 });
 
 test("browser preview explains that database backups are native-only", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Settings" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Protect local restaurant data" }),
+  ).not.toBeVisible();
+  await page.getByRole("button", { name: "Data & backup" }).click();
   await expect(
     page.getByRole("heading", { name: "Protect local restaurant data" }),
   ).toBeVisible();

@@ -492,6 +492,7 @@ export function App() {
       ...current.filter((printer) => printer.id !== saved.id),
       saved,
     ]);
+    return saved;
   }
   async function createStaff(name: string, role: string, pin: string) {
     const created = await client.createStaff(name, role, pin);
@@ -706,11 +707,6 @@ export function App() {
         )}
         {activeScreen === "Settings" && (
           <SettingsScreen
-            key={
-              printers
-                .map((printer) => `${printer.role}:${printer.id}`)
-                .join("|") || "no-printers"
-            }
             printers={printers}
             onSavePrinter={savePrinter}
             onTestPrinter={testPrinter}

@@ -70,3 +70,5 @@ export * from "./escpos";
 export * from "./formatters/kitchen-ticket";
 export * from "./formatters/receipt";
 export * from "./preview";
+export * from "./paper-width";
+export * from "./paper-width";
