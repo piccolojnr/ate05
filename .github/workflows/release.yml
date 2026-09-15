@@ -24,7 +24,8 @@ jobs:
             os: windows-latest
             args: ""
           - name: macOS Intel
-            os: macos-13
+            # macos-13 was retired; this label is the supported Intel runner.
+            os: macos-15-intel
             args: "--target x86_64-apple-darwin"
           - name: macOS Apple Silicon
             os: macos-14
@@ -49,7 +50,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.os == 'macos-13' && 'x86_64-apple-darwin' || matrix.os == 'macos-14' && 'aarch64-apple-darwin' || '' }}
+          targets: ${{ matrix.os == 'macos-15-intel' && 'x86_64-apple-darwin' || matrix.os == 'macos-14' && 'aarch64-apple-darwin' || '' }}
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
