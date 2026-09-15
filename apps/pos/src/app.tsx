@@ -757,6 +757,7 @@ export function App() {
       onNavigate={setActiveScreen}
       session={session}
       onLock={() => void lock()}
+      onStartNewOrder={startNewOrder}
       businessName={authBootstrap.businessName}
       databaseHealthy={databaseHealth?.healthy ?? true}
       pendingPrints={pendingPrints}

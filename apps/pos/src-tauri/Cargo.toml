@@ -1,6 +1,6 @@
 [package]
 name = "ate05-pos"
-version = "0.1.1"
+version = "0.1.2"
 description = "ATE05 offline-first restaurant POS"
 authors = ["RiTech"]
 edition = "2021"
