@@ -429,6 +429,8 @@ fn main() {
             print_receipt,
             test_printer,
             list_backups,
+            verify_backup,
+            delete_backup,
             backup_now,
             database_health,
             restore_backup,
@@ -480,6 +482,24 @@ async fn native_pool(app: &tauri::AppHandle) -> Result<sqlx::SqlitePool, String>
 async fn list_backups(app: tauri::AppHandle) -> Result<Vec<backup::BackupInfo>, String> {
     let (_, backups_dir) = native_paths(&app)?;
     backup::list(&backups_dir).await
+}
+
+#[tauri::command]
+async fn verify_backup(
+    app: tauri::AppHandle,
+    file_name: String,
+) -> Result<backup::BackupInfo, String> {
+    let (_, backups_dir) = native_paths(&app)?;
+    backup::verify_named(&backups_dir, &file_name)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn delete_backup(app: tauri::AppHandle, file_name: String) -> Result<(), String> {
+    auth::require_permission(&app, "backup")?;
+    let (_, backups_dir) = native_paths(&app)?;
+    backup::delete(&backups_dir, &file_name)
 }
 
 #[tauri::command]

@@ -2166,6 +2166,21 @@ export function createTauriClient(): PosClient {
         throw new PosClientError("database", String(cause));
       }
     },
+    async verifyBackup(fileName) {
+      try {
+        return await invoke<BackupInfo>("verify_backup", { fileName });
+      } catch (cause) {
+        throw new PosClientError("database", String(cause));
+      }
+    },
+    async deleteBackup(fileName) {
+      requirePermission("backup");
+      try {
+        await invoke("delete_backup", { fileName });
+      } catch (cause) {
+        throw new PosClientError("database", String(cause));
+      }
+    },
     async backupNow() {
       requirePermission("backup");
       try {
@@ -2178,8 +2193,8 @@ export function createTauriClient(): PosClient {
       requirePermission("backup");
       const destination = await save({
         title: "Export ATE05 backup",
-        defaultPath: `ate05-backup-${new Date().toISOString().replace(/[:]/g, "-").slice(0, 16)}.sqlite`,
-        filters: [{ name: "SQLite backup", extensions: ["sqlite"] }],
+        defaultPath: `ate05-backup-${new Date().toISOString().replace(/[:]/g, "-").slice(0, 16)}.ate05backup`,
+        filters: [{ name: "ATE05 backup", extensions: ["ate05backup"] }],
       });
       if (!destination) return null;
       try {

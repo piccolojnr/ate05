@@ -546,6 +546,8 @@ export function SettingsScreen({
   onBackupNow,
   onExportBackup,
   onRestoreBackup,
+  onVerifyBackup,
+  onDeleteBackup,
   staff,
   onCreateStaff,
   onUpdateStaff,
@@ -562,6 +564,8 @@ export function SettingsScreen({
   onBackupNow: () => Promise<void>;
   onExportBackup: () => Promise<string | null>;
   onRestoreBackup: (fileName: string) => Promise<void>;
+  onVerifyBackup: (fileName: string) => Promise<void>;
+  onDeleteBackup: (fileName: string) => Promise<void>;
   staff: AuthUser[];
   onCreateStaff: (name: string, role: string, pin: string) => Promise<void>;
   onUpdateStaff: (input: {
@@ -827,12 +831,22 @@ export function SettingsScreen({
                 </label>
               ) : null}
               {native && selectedBackup && !confirmRestore ? (
-                <Button
-                  variant="secondary"
-                  onClick={() => setConfirmRestore(true)}
-                >
-                  Restore selected backup
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" onClick={() => void onVerifyBackup(selectedBackup)}>
+                    Verify selected
+                  </Button>
+                  <Button variant="secondary" onClick={() => setConfirmRestore(true)}>
+                    Restore selected backup
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      if (window.confirm("Delete this backup?")) void onDeleteBackup(selectedBackup);
+                    }}
+                  >
+                    Delete selected
+                  </Button>
+                </div>
               ) : null}
             </div>
             {confirmRestore ? (

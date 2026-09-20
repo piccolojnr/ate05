@@ -14,6 +14,8 @@ const capabilityMethods = [
   "listInventory",
   "listPrinters",
   "listBackups",
+  "verifyBackup",
+  "deleteBackup",
 ] as const;
 
 function expectClientCapabilities(client: PosClient): void {

@@ -227,6 +227,8 @@ export interface SettingsClient {
 
 export interface RecoveryClient {
   listBackups(): Promise<BackupInfo[]>;
+  verifyBackup(fileName: string): Promise<BackupInfo>;
+  deleteBackup(fileName: string): Promise<void>;
   backupNow(): Promise<BackupInfo>;
   exportBackup(): Promise<string | null>;
   databaseHealth(): Promise<DatabaseHealth>;

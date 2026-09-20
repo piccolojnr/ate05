@@ -546,6 +546,26 @@ export function App() {
       throw cause;
     }
   }
+  async function verifyBackup(fileName: string) {
+    try {
+      const info = await client.verifyBackup(fileName);
+      setBackups(await client.listBackups());
+      notify.success(`Backup verified · ${info.appVersion}`);
+    } catch (cause) {
+      notify.error(cause instanceof Error ? cause.message : "Unable to verify backup.");
+      throw cause;
+    }
+  }
+  async function deleteBackup(fileName: string) {
+    try {
+      await client.deleteBackup(fileName);
+      setBackups(await client.listBackups());
+      notify.success("Backup deleted.");
+    } catch (cause) {
+      notify.error(cause instanceof Error ? cause.message : "Unable to delete backup.");
+      throw cause;
+    }
+  }
   async function retryPendingPrints() {
     const updatedOrders = await client.retryPendingKitchenPrints();
     const current = updatedOrders.find((entry) => entry.id === order?.id);
@@ -717,6 +737,8 @@ export function App() {
             onBackupNow={backupNow}
             onExportBackup={exportBackup}
             onRestoreBackup={restoreBackup}
+            onVerifyBackup={verifyBackup}
+            onDeleteBackup={deleteBackup}
             staff={staff}
             onCreateStaff={createStaff}
             onUpdateStaff={updateStaff}

@@ -154,11 +154,16 @@ export type PosPrinterConfig = PrinterConfig;
 
 export interface BackupInfo {
   fileName: string;
-  kind: "automatic" | "manual" | "pre_restore";
+  kind: "automatic" | "manual" | "pre_restore" | "unknown";
   createdAt: number;
   schemaVersion: number;
   sizeBytes: number;
   valid: boolean;
+  formatVersion: number;
+  appVersion: string;
+  backupId: string;
+  checksum: string;
+  verificationStatus: string;
 }
 
 export interface DatabaseHealth {

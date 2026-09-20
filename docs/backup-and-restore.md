@@ -1,10 +1,10 @@
 # ATE05 backup and restore
 
-ATE05 keeps its authoritative SQLite database in the platform-specific Tauri application configuration directory as `ate05.db`. It does not store the production database in the repository. Backups are stored in the platform-specific application data directory under `backups/`.
+ATE05 keeps its authoritative SQLite database in the platform-specific Tauri application configuration directory as `ate05.db`. It does not store the production database in the repository. Backups are stored in the platform-specific application data directory under `backups/` as extensible `*.ate05backup` artifact directories containing `manifest.json` and `database.sqlite`.
 
 ## Backup mechanism
 
-Backups use SQLite `VACUUM INTO` through the native SQLx connection. This creates a consistent SQLite snapshot while the POS is running and accounts for SQLite journaling correctly; the application never copies the live `.db` file directly. After creation, ATE05 opens the snapshot, runs `PRAGMA integrity_check`, verifies the migration metadata, and checks the required V1 tables before reporting success.
+Backups use SQLite `VACUUM INTO` through the native SQLx connection. This creates a consistent SQLite snapshot while the POS is running and accounts for SQLite journaling correctly; the application never copies the live `.db` file directly. The manifest records format/app/schema versions, business identifier, timestamp, backup identifier, database SHA-256, and encryption mode (`none` in Phase 1). ATE05 opens the snapshot, checks integrity/foreign keys, verifies migration metadata and required tables, and checks the checksum before reporting success.
 
 ## Automatic backups and retention
 
@@ -14,7 +14,7 @@ On native application startup, ATE05 attempts at most one automatic backup per U
 
 Settings → Data & Backup → Back Up Now creates and validates a manual SQLite snapshot. The UI shows the local database health and the most recent automatic/manual backup. Browser preview clearly reports that it does not create production SQLite files.
 
-Export Backup now uses the native file dialog to write a validated snapshot to a user-selected `.sqlite` destination. The renderer cannot write arbitrary files or copy the live database. The current local backup operation remains useful for same-machine recovery; production operations should additionally keep exported backups on removable or otherwise separate storage.
+Export Backup now uses the native file dialog to write a validated `.ate05backup` artifact to a user-selected destination. The renderer cannot write arbitrary files or copy the live database. The current local backup operation remains useful for same-machine recovery; production operations should additionally keep exported backups on removable or otherwise separate storage.
 
 ## Restore procedure
 
