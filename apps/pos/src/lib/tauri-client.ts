@@ -12,6 +12,7 @@ import {
 import type {
   KitchenTicket,
   BackupInfo,
+  RecoveryKeyStatus,
   AuthBootstrap,
   AuthUser,
   SessionUser,
@@ -2166,9 +2167,9 @@ export function createTauriClient(): PosClient {
         throw new PosClientError("database", String(cause));
       }
     },
-    async verifyBackup(fileName) {
+    async verifyBackup(fileName, recoveryKey) {
       try {
-        return await invoke<BackupInfo>("verify_backup", { fileName });
+        return await invoke<BackupInfo>("verify_backup", { fileName, recoveryKey });
       } catch (cause) {
         throw new PosClientError("database", String(cause));
       }
@@ -2180,6 +2181,17 @@ export function createTauriClient(): PosClient {
       } catch (cause) {
         throw new PosClientError("database", String(cause));
       }
+    },
+    async recoveryKeyStatus() {
+      return await invoke<RecoveryKeyStatus>("backup_recovery_status");
+    },
+    async createRecoveryKey() {
+      requirePermission("backup");
+      return await invoke<string>("create_backup_recovery_key");
+    },
+    async saveRecoveryKey(recoveryKey) {
+      requirePermission("backup");
+      await invoke("save_backup_recovery_key", { recoveryKey });
     },
     async backupNow() {
       requirePermission("backup");
@@ -2210,10 +2222,10 @@ export function createTauriClient(): PosClient {
         throw new PosClientError("database", String(cause));
       }
     },
-    async restoreBackup(fileName) {
+    async restoreBackup(fileName, recoveryKey) {
       requirePermission("backup");
       try {
-        return await invoke<BackupInfo>("restore_backup", { fileName });
+        return await invoke<BackupInfo>("restore_backup", { fileName, recoveryKey });
       } catch (cause) {
         throw new PosClientError("database", String(cause));
       }

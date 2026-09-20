@@ -1105,6 +1105,15 @@ export function createBrowserPreviewClient(): PosClient {
     async deleteBackup(): Promise<void> {
       throw new Error("Backup deletion is available in the native desktop app only.");
     },
+    async recoveryKeyStatus() {
+      return { configured: false };
+    },
+    async createRecoveryKey() {
+      throw new Error("Recovery credentials are available in the native desktop app only.");
+    },
+    async saveRecoveryKey() {
+      throw new Error("Recovery credentials are available in the native desktop app only.");
+    },
     async backupNow(): Promise<BackupInfo> {
       requirePermission("backup");
       throw new Error("Backups are available in the native desktop app only.");

@@ -1,45 +1,68 @@
 # ATE05 backup and restore
 
-ATE05 keeps its authoritative SQLite database in the platform-specific Tauri application configuration directory as `ate05.db`. It does not store the production database in the repository. Backups are stored in the platform-specific application data directory under `backups/` as extensible `*.ate05backup` artifact directories containing `manifest.json` and `database.sqlite`.
+ATE05 stores its authoritative SQLite database as `ate05.db` in the platform-specific Tauri application configuration directory. Local backups live in the platform-specific application data directory under `backups/`.
 
-## Backup mechanism
+## `.ate05backup` format
 
-Backups use SQLite `VACUUM INTO` through the native SQLx connection. This creates a consistent SQLite snapshot while the POS is running and accounts for SQLite journaling correctly; the application never copies the live `.db` file directly. The manifest records format/app/schema versions, business identifier, timestamp, backup identifier, database SHA-256, and encryption mode (`none` in Phase 1). ATE05 opens the snapshot, checks integrity/foreign keys, verifies migration metadata and required tables, and checks the checksum before reporting success.
+New backups are single opaque files named `ATE05-<unix-timestamp>-<backup-id>-<kind>.ate05backup`.
 
-## Automatic backups and retention
+The file begins with a small readable outer header:
 
-On native application startup, ATE05 attempts at most one automatic backup per UTC day. A valid backup for the current day is reused. Automatic backups are retained up to the most recent 14 files. Manual and pre-restore backups are not removed by automatic retention. Automatic backup failure is logged as a warning and does not prevent the POS from opening when the primary database is healthy.
+```text
+ATE05BK\0
+u32 little-endian header length
+JSON header
+encrypted payload records
+```
 
-## Manual backup
+The outer header contains only non-business cryptographic metadata: format version, `chacha20-poly1305` algorithm identifier, `argon2id` KDF identifier, random salt, random base nonce, timestamp, backup identifier, and app version. Business identifier, staff, transactions, and database metadata remain inside the encrypted payload.
 
-Settings → Data & Backup → Back Up Now creates and validates a manual SQLite snapshot. The UI shows the local database health and the most recent automatic/manual backup. Browser preview clearly reports that it does not create production SQLite files.
+The encrypted payload is a tar archive containing `manifest.json`, `database.sqlite`, and future optional files. It is encrypted in authenticated 1 MiB records with ChaCha20-Poly1305. Each record uses a derived nonce and authenticates the outer header plus its record number as associated data. Temporary files are used so the entire SQLite database is not loaded into memory.
 
-Export Backup now uses the native file dialog to write a validated `.ate05backup` artifact to a user-selected destination. The renderer cannot write arbitrary files or copy the live database. The current local backup operation remains useful for same-machine recovery; production operations should additionally keep exported backups on removable or otherwise separate storage.
+The manifest records format/app/schema versions, business identifier, creation timestamp, backup identifier, database SHA-256, and encryption mode. The SHA-256 covers the plaintext `database.sqlite` entry inside the authenticated payload. AEAD authentication protects the encrypted container; the manifest checksum protects logical payload consistency after decryption.
 
-## Restore procedure
+## Key management and recovery
 
-1. Open Settings → Data & Backup.
-2. Choose one of the validated backups.
-3. Select Restore selected backup.
-4. Read the warning and select Confirm restore.
-5. A pre-restore safety snapshot is created first.
-6. The selected file is validated and copied to a temporary database.
-7. The temporary database runs the normal forward migration set and is validated again.
-8. The active database connection is closed, the validated database is installed, and the native connection is reopened.
-9. Application state is reloaded. Restart ATE05 if the operating system or a future migration requires it.
+ATE05 derives the 256-bit encryption key with Argon2id using the owner recovery credential and the random per-backup salt. The recovery credential is never written to SQLite, the manifest, normal settings files, environment files, or the backup file.
 
-Restore accepts only a backup filename returned by the native backup list; renderer code cannot submit arbitrary filesystem paths. The safety backup is classified `pre_restore` and is not part of daily automatic retention.
+On the current machine, ATE05 stores the credential in the OS credential store through the Rust `keyring` crate. The Data & backup screen has an intentional recovery-key setup action. The owner must save the displayed key separately:
 
-## Schema compatibility and corruption
+> If this computer is lost, this recovery key is required to restore encrypted backups on another computer.
 
-Backups record the SQL migration version. A backup from a newer application version is rejected with a compatibility error. Older backups are staged and passed through the checked-in forward migrations before installation. Corrupt, incomplete, missing-table, or failed-integrity backups are rejected and never installed.
+On a replacement installation, the recovery key can be supplied during verify/restore and optionally saved into that installation's OS credential store. Google Drive will only store opaque encrypted files and will not receive the key.
 
-If the primary database becomes unusable, start ATE05, open Settings, and restore the newest validated backup. If the application cannot open far enough to reach Settings, preserve the application-data directory and contact support before deleting or replacing files; the pre-restore and daily backup files are recovery points.
+Phase 1.5 uses Argon2id's established default parameters and random salts. Encryption is not silently disabled if secure key storage or encryption fails.
 
-## Browser/native behavior
+## Creation
 
-Native Tauri mode performs real SQLite snapshots, health checks, and restore operations. Browser preview uses simulated local storage for workflow development and never claims to create or restore a production SQLite file.
+1. Create a SQLite-consistent snapshot with `VACUUM INTO`.
+2. Validate SQLite integrity, foreign keys, migration metadata, and required tables.
+3. Build the manifest and tar payload.
+4. Encrypt/authenticate the payload into a temporary `.tmp` file.
+5. Verify the completed artifact by decrypting and validating it.
+6. Atomically move it to its final `.ate05backup` name.
 
-## Deferred
+Automatic and manual backups use the same encrypted format. Automatic failures are reported as backup failures and never fall back to plaintext.
 
-Cloud/remote backups, encryption overhaul, automatic remote export, multi-device replication, per-domain exports, and a native file picker for external backup export remain intentionally deferred.
+## Verification and restore
+
+Verification checks the outer signature/header, supported format and algorithms, recovery credential, AEAD authentication, safe archive entries, manifest, SHA-256 checksum, SQLite readability, schema compatibility, integrity, foreign keys, and required tables.
+
+Restore decrypts and extracts into a temporary staging directory, validates everything, creates a pre-restore safety backup, applies forward migrations to a staged database, validates it again, then atomically swaps the active database with a rollback path. Failures before the final swap leave the current database untouched. Temporary staging resources are removed on success and failure.
+
+Archive extraction accepts only regular `manifest.json` and `database.sqlite` entries and rejects duplicate, unexpected, absolute, or parent-traversing paths.
+
+## Legacy compatibility
+
+The previous directory-based format is still detected and can be verified/restored. It is marked `verified legacy plaintext` and is never silently deleted. New backups are always encrypted single-file artifacts. Existing legacy backups can be restored first and then re-backed-up into the new format using Back Up Now or Export Backup.
+
+## Browser and cloud boundaries
+
+Browser preview does not claim native filesystem or encrypted-backup capabilities. The local provider owns only artifact enumeration, deletion, and local paths; the backup engine owns snapshotting, encryption, verification, and restore. A future Google Drive provider can upload/download `.ate05backup` files as opaque binary objects without knowing their contents or recovery credential.
+
+## Limitations
+
+- Phase 1.5 has no Google OAuth, Drive API, cloud uploads, downloads, scheduling, or retry logic.
+- Recovery depends on the owner preserving the recovery key outside the original machine.
+- The OS credential-store backend must be available for automatic/manual backup creation on the installed machine.
+- Encryption metadata in the outer header is intentionally readable; business data and the manifest are encrypted.

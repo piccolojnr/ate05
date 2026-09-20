@@ -546,6 +546,8 @@ export function SettingsScreen({
   onBackupNow,
   onExportBackup,
   onRestoreBackup,
+  onCreateRecoveryKey,
+  onSaveRecoveryKey,
   onVerifyBackup,
   onDeleteBackup,
   staff,
@@ -563,8 +565,10 @@ export function SettingsScreen({
   databaseHealth: DatabaseHealth | null;
   onBackupNow: () => Promise<void>;
   onExportBackup: () => Promise<string | null>;
-  onRestoreBackup: (fileName: string) => Promise<void>;
-  onVerifyBackup: (fileName: string) => Promise<void>;
+  onRestoreBackup: (fileName: string, recoveryKey?: string) => Promise<void>;
+  onCreateRecoveryKey: () => Promise<string>;
+  onSaveRecoveryKey: (recoveryKey: string) => Promise<void>;
+  onVerifyBackup: (fileName: string, recoveryKey?: string) => Promise<void>;
   onDeleteBackup: (fileName: string) => Promise<void>;
   staff: AuthUser[];
   onCreateStaff: (name: string, role: string, pin: string) => Promise<void>;
@@ -579,6 +583,8 @@ export function SettingsScreen({
   const [backupState, setBackupState] = useState<"idle" | "working">("idle");
   const [selectedBackup, setSelectedBackup] = useState("");
   const [confirmRestore, setConfirmRestore] = useState(false);
+  const [recoveryKey, setRecoveryKey] = useState("");
+  const [showRecoveryKey, setShowRecoveryKey] = useState(false);
   const [activeTab, setActiveTab] = useState<"staff" | "printers" | "data">(
     "printers",
   );
@@ -609,7 +615,7 @@ export function SettingsScreen({
     if (!selectedBackup) return;
     setBackupState("working");
     try {
-      await onRestoreBackup(selectedBackup);
+      await onRestoreBackup(selectedBackup, recoveryKey || undefined);
       setSelectedBackup("");
       setConfirmRestore(false);
     } finally {
@@ -824,7 +830,7 @@ export function SettingsScreen({
                     {backups.map((backup) => (
                       <option key={backup.fileName} value={backup.fileName}>
                         {backup.kind.replace("_", " ")} ·{" "}
-                        {formatBackupDate(backup)}
+                        {formatBackupDate(backup)} · {backup.verificationStatus}
                       </option>
                     ))}
                   </Select>
@@ -832,7 +838,7 @@ export function SettingsScreen({
               ) : null}
               {native && selectedBackup && !confirmRestore ? (
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="secondary" onClick={() => void onVerifyBackup(selectedBackup)}>
+                  <Button variant="secondary" onClick={() => void onVerifyBackup(selectedBackup, recoveryKey || undefined)}>
                     Verify selected
                   </Button>
                   <Button variant="secondary" onClick={() => setConfirmRestore(true)}>
@@ -846,6 +852,45 @@ export function SettingsScreen({
                   >
                     Delete selected
                   </Button>
+                </div>
+              ) : null}
+              {native && selectedBackup ? (
+                <div className="mt-4 w-full rounded-md border border-primary/20 bg-primary/5 p-4">
+                  <p className="font-bold">Encrypted backup recovery</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Keep the recovery key separately. If this computer is lost,
+                    the key is required to restore encrypted backups elsewhere.
+                  </p>
+                  {showRecoveryKey ? (
+                    <Input
+                      className="mt-3 font-mono text-xs"
+                      value={recoveryKey}
+                      onChange={(event) => setRecoveryKey(event.target.value)}
+                      placeholder="Paste recovery key for another installation"
+                    />
+                  ) : null}
+                  <Button
+                    className="mt-3"
+                    variant="secondary"
+                    onClick={() => {
+                      if (showRecoveryKey) return;
+                      void onCreateRecoveryKey().then((key) => {
+                        setRecoveryKey(key);
+                        setShowRecoveryKey(true);
+                      });
+                    }}
+                  >
+                    {showRecoveryKey ? "Recovery key shown" : "Set up recovery key"}
+                  </Button>
+                  {showRecoveryKey && recoveryKey ? (
+                    <Button
+                      className="mt-3"
+                      variant="secondary"
+                      onClick={() => void onSaveRecoveryKey(recoveryKey)}
+                    >
+                      Save key on this computer
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
             </div>

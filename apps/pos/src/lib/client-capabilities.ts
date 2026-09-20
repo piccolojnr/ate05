@@ -3,6 +3,7 @@ import type {
   AuthBootstrap,
   AuthUser,
   BackupInfo,
+  RecoveryKeyStatus,
   DatabaseHealth,
   InventoryItem,
   InventoryUnit,
@@ -227,10 +228,13 @@ export interface SettingsClient {
 
 export interface RecoveryClient {
   listBackups(): Promise<BackupInfo[]>;
-  verifyBackup(fileName: string): Promise<BackupInfo>;
+  verifyBackup(fileName: string, recoveryKey?: string): Promise<BackupInfo>;
   deleteBackup(fileName: string): Promise<void>;
+  recoveryKeyStatus(): Promise<RecoveryKeyStatus>;
+  createRecoveryKey(): Promise<string>;
+  saveRecoveryKey(recoveryKey: string): Promise<void>;
   backupNow(): Promise<BackupInfo>;
   exportBackup(): Promise<string | null>;
   databaseHealth(): Promise<DatabaseHealth>;
-  restoreBackup(fileName: string): Promise<BackupInfo>;
+  restoreBackup(fileName: string, recoveryKey?: string): Promise<BackupInfo>;
 }

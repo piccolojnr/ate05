@@ -431,6 +431,9 @@ fn main() {
             list_backups,
             verify_backup,
             delete_backup,
+            backup_recovery_status,
+            create_backup_recovery_key,
+            save_backup_recovery_key,
             backup_now,
             database_health,
             restore_backup,
@@ -488,11 +491,29 @@ async fn list_backups(app: tauri::AppHandle) -> Result<Vec<backup::BackupInfo>, 
 async fn verify_backup(
     app: tauri::AppHandle,
     file_name: String,
+    recovery_key: Option<String>,
 ) -> Result<backup::BackupInfo, String> {
     let (_, backups_dir) = native_paths(&app)?;
-    backup::verify_named(&backups_dir, &file_name)
+    backup::verify_named_with_key(&backups_dir, &file_name, recovery_key.as_deref())
         .await
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn backup_recovery_status() -> Result<backup::RecoveryKeyStatus, String> {
+    backup::recovery_status()
+}
+
+#[tauri::command]
+fn create_backup_recovery_key(app: tauri::AppHandle) -> Result<String, String> {
+    auth::require_permission(&app, "backup")?;
+    backup::ensure_recovery_key().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_backup_recovery_key(app: tauri::AppHandle, recovery_key: String) -> Result<(), String> {
+    auth::require_permission(&app, "backup")?;
+    backup::set_recovery_key(&recovery_key)
 }
 
 #[tauri::command]
@@ -520,11 +541,19 @@ async fn database_health(app: tauri::AppHandle) -> Result<backup::DatabaseHealth
 async fn restore_backup(
     app: tauri::AppHandle,
     file_name: String,
+    recovery_key: Option<String>,
 ) -> Result<backup::BackupInfo, String> {
     auth::require_permission(&app, "backup")?;
     let pool = native_pool(&app).await?;
     let (database_path, backups_dir) = native_paths(&app)?;
-    let (new_pool, info) = backup::restore(pool, &database_path, &backups_dir, &file_name).await?;
+    let (new_pool, info) = backup::restore(
+        pool,
+        &database_path,
+        &backups_dir,
+        &file_name,
+        recovery_key.as_deref(),
+    )
+    .await?;
     let instances = app.state::<tauri_plugin_sql::DbInstances>();
     let previous = instances.0.write().await.insert(
         "sqlite:ate05.db".into(),

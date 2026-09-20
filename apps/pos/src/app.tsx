@@ -533,9 +533,9 @@ export function App() {
       throw cause;
     }
   }
-  async function restoreBackup(fileName: string) {
+  async function restoreBackup(fileName: string, recoveryKey?: string) {
     try {
-      await client.restoreBackup(fileName);
+      await client.restoreBackup(fileName, recoveryKey);
       setOrder(null);
       await refresh();
       notify.success("Backup restored. Local data has been reloaded.");
@@ -546,9 +546,18 @@ export function App() {
       throw cause;
     }
   }
-  async function verifyBackup(fileName: string) {
+  async function createRecoveryKey() {
+    const key = await client.createRecoveryKey();
+    notify.success("Recovery key is ready. Save it somewhere secure.");
+    return key;
+  }
+  async function saveRecoveryKey(recoveryKey: string) {
+    await client.saveRecoveryKey(recoveryKey);
+    notify.success("Recovery key saved in this computer's secure credential store.");
+  }
+  async function verifyBackup(fileName: string, recoveryKey?: string) {
     try {
-      const info = await client.verifyBackup(fileName);
+      const info = await client.verifyBackup(fileName, recoveryKey);
       setBackups(await client.listBackups());
       notify.success(`Backup verified · ${info.appVersion}`);
     } catch (cause) {
@@ -737,6 +746,8 @@ export function App() {
             onBackupNow={backupNow}
             onExportBackup={exportBackup}
             onRestoreBackup={restoreBackup}
+            onCreateRecoveryKey={createRecoveryKey}
+            onSaveRecoveryKey={saveRecoveryKey}
             onVerifyBackup={verifyBackup}
             onDeleteBackup={deleteBackup}
             staff={staff}

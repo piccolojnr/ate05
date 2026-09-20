@@ -164,6 +164,11 @@ export interface BackupInfo {
   backupId: string;
   checksum: string;
   verificationStatus: string;
+  encrypted: boolean;
+}
+
+export interface RecoveryKeyStatus {
+  configured: boolean;
 }
 
 export interface DatabaseHealth {
