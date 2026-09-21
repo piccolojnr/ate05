@@ -370,6 +370,14 @@ fn main() {
                             ),
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 6,
+                            description: "menu_price_options",
+                            sql: include_str!(
+                                "../../../../packages/database/drizzle/0005_menu_price_options.sql"
+                            ),
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),
@@ -561,5 +569,32 @@ mod tests {
         assert!(text.contains("REPRINT"));
         assert!(text.contains("ORDER #0142"));
         assert!(text.contains("TICKET 2"));
+    }
+
+    #[test]
+    fn native_receipt_payload_preserves_selected_option_snapshot() {
+        let receipt = ReceiptRequest {
+            business_name: "Migration Cafe".into(),
+            receipt_number: 12,
+            order_number: 42,
+            issued_at: "21 Sep 2026 12:00".into(),
+            table_name: None,
+            items: vec![ReceiptItemRequest {
+                name: "Tilapia — Large".into(),
+                quantity: 1,
+                line_total_minor: 11000,
+            }],
+            subtotal_minor: 11000,
+            total_minor: 11000,
+            reprint: true,
+            payments: vec![ReceiptPaymentRequest {
+                method: "cash".into(),
+                amount_minor: 11000,
+            }],
+        };
+        let text = receipt_text(&receipt, 58);
+        assert!(text.contains("Tilapia — Large"));
+        assert!(text.contains("GHS 110.00"));
+        assert!(text.contains("REPRINT"));
     }
 }

@@ -1,5 +1,10 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { Button, Card, Checkbox, Input, Select, Textarea } from "@ate05/ui";
+import {
+  validateMenuPricing,
+  type MenuPriceOptionInput,
+  type PricingMode,
+} from "@ate05/domain";
 import { Icon } from "../../components/icons";
 import { PageHeader } from "../../components/page-header";
 import { StatusBadge } from "../../components/status-badge";
@@ -15,6 +20,8 @@ type MenuItemInput = {
   description: string;
   categoryId: string;
   sellingPriceMinor: number;
+  pricingMode: PricingMode;
+  priceOptions: MenuPriceOptionInput[];
   available: boolean;
   active: boolean;
 };
@@ -176,6 +183,22 @@ function MenuItemForm({
   const [price, setPrice] = useState(
     item ? (item.sellingPriceMinor / 100).toFixed(2) : "",
   );
+  const [pricingMode, setPricingMode] = useState<PricingMode>(
+    item?.pricingMode ?? "fixed",
+  );
+  const [priceOptions, setPriceOptions] = useState<
+    Array<{ id?: string; name: string; price: string }>
+  >(
+    () =>
+      item?.priceOptions
+        .filter((option) => option.active)
+        .sort((left, right) => left.sortOrder - right.sortOrder)
+        .map((option) => ({
+          id: option.id,
+          name: option.name,
+          price: (option.priceMinor / 100).toFixed(2),
+        })) ?? [],
+  );
   const [available, setAvailable] = useState(item?.available ?? true);
   const [active, setActive] = useState(item?.active ?? true);
   const [error, setError] = useState<string | null>(null);
@@ -183,11 +206,38 @@ function MenuItemForm({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const sellingPriceMinor = parsePriceMinor(price);
+    const parsedFixedPrice = parsePriceMinor(price);
     if (!name.trim()) return setError("Item name is required.");
     if (!categoryId) return setError("Choose a category.");
-    if (sellingPriceMinor === null)
+    if (pricingMode === "fixed" && parsedFixedPrice === null)
       return setError("Enter a price with up to two decimal places.");
+    const parsedOptions: MenuPriceOptionInput[] = [];
+    for (const option of priceOptions) {
+      const priceMinor = parsePriceMinor(option.price);
+      if (priceMinor === null)
+        return setError(
+          "Enter each option price with up to two decimal places.",
+        );
+      parsedOptions.push({
+        id: option.id,
+        name: option.name,
+        priceMinor,
+      });
+    }
+    const sellingPriceMinor = parsedFixedPrice ?? item?.sellingPriceMinor ?? 0;
+    try {
+      validateMenuPricing({
+        pricingMode,
+        sellingPriceMinor,
+        priceOptions: parsedOptions,
+      });
+    } catch (cause) {
+      return setError(
+        cause instanceof Error
+          ? cause.message
+          : "Invalid pricing configuration.",
+      );
+    }
     setSaving(true);
     setError(null);
     try {
@@ -197,6 +247,8 @@ function MenuItemForm({
         description,
         categoryId,
         sellingPriceMinor,
+        pricingMode,
+        priceOptions: parsedOptions,
         available,
         active,
       });
@@ -218,7 +270,7 @@ function MenuItemForm({
       }}
     >
       <Card
-        className="flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col overflow-y-auto p-6 shadow-floating sm:max-h-[calc(100dvh-3rem)]"
+        className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col overflow-y-auto p-6 shadow-floating sm:max-h-[calc(100dvh-3rem)]"
         role="dialog"
         aria-modal="true"
         aria-labelledby="menu-item-form-title"
@@ -270,34 +322,188 @@ function MenuItemForm({
               className="mt-1 min-h-20"
             />
           </label>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="block text-sm font-semibold">
-              Category
-              <Select
-                value={categoryId}
-                onChange={(event) => setCategoryId(event.target.value)}
-                className="mt-1 min-h-10"
-              >
-                {categories
-                  .filter((category) => category.active)
-                  .map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-              </Select>
-            </label>
-            <label className="block text-sm font-semibold">
-              Price (GHS)
-              <Input
-                value={price}
-                onChange={(event) => setPrice(event.target.value)}
-                inputMode="decimal"
-                placeholder="50.00"
-                className="mt-1 tabular-nums"
-              />
-            </label>
-          </div>
+          <label className="block text-sm font-semibold">
+            Category
+            <Select
+              value={categoryId}
+              onChange={(event) => setCategoryId(event.target.value)}
+              className="mt-1 min-h-10"
+            >
+              {categories
+                .filter((category) => category.active)
+                .map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+            </Select>
+          </label>
+          <fieldset className="space-y-4 rounded-md border p-4">
+            <legend className="px-1 text-sm font-black">Pricing</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {(
+                [
+                  ["fixed", "Fixed price", "One price; tap adds immediately."],
+                  [
+                    "options",
+                    "Price options",
+                    "Cashier chooses a named price when selling.",
+                  ],
+                ] as const
+              ).map(([value, label, description]) => (
+                <label
+                  key={value}
+                  className={`flex cursor-pointer gap-3 rounded-md border p-3 ${pricingMode === value ? "border-primary bg-primary/[0.04]" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="pricing-mode"
+                    value={value}
+                    checked={pricingMode === value}
+                    onChange={() => setPricingMode(value)}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="block text-sm font-bold">{label}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {description}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            {pricingMode === "fixed" ? (
+              <label className="block text-sm font-semibold">
+                Price (GHS)
+                <Input
+                  aria-label="Price (GHS)"
+                  value={price}
+                  onChange={(event) => setPrice(event.target.value)}
+                  inputMode="decimal"
+                  placeholder="50.00"
+                  className="mt-1 tabular-nums"
+                />
+              </label>
+            ) : (
+              <div className="space-y-3">
+                {priceOptions.map((option, index) => (
+                  <div
+                    key={option.id ?? `new-${index}`}
+                    className="grid gap-2 rounded-md bg-muted/30 p-3 sm:grid-cols-[minmax(0,1fr)_140px_auto] sm:items-end"
+                  >
+                    <label className="text-sm font-semibold">
+                      Name
+                      <Input
+                        aria-label={`Option ${index + 1} name`}
+                        value={option.name}
+                        onChange={(event) =>
+                          setPriceOptions((current) =>
+                            current.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? { ...entry, name: event.target.value }
+                                : entry,
+                            ),
+                          )
+                        }
+                        placeholder="e.g. Large"
+                        className="mt-1"
+                      />
+                    </label>
+                    <label className="text-sm font-semibold">
+                      Price (GHS)
+                      <Input
+                        aria-label={`Option ${index + 1} price (GHS)`}
+                        value={option.price}
+                        onChange={(event) =>
+                          setPriceOptions((current) =>
+                            current.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? { ...entry, price: event.target.value }
+                                : entry,
+                            ),
+                          )
+                        }
+                        inputMode="decimal"
+                        placeholder="60.00"
+                        className="mt-1 tabular-nums"
+                      />
+                    </label>
+                    <div className="flex gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Move ${option.name || `option ${index + 1}`} up`}
+                        disabled={index === 0}
+                        onClick={() =>
+                          setPriceOptions((current) => {
+                            const next = [...current];
+                            [next[index - 1], next[index]] = [
+                              next[index]!,
+                              next[index - 1]!,
+                            ];
+                            return next;
+                          })
+                        }
+                      >
+                        ↑
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Move ${option.name || `option ${index + 1}`} down`}
+                        disabled={index === priceOptions.length - 1}
+                        onClick={() =>
+                          setPriceOptions((current) => {
+                            const next = [...current];
+                            [next[index], next[index + 1]] = [
+                              next[index + 1]!,
+                              next[index]!,
+                            ];
+                            return next;
+                          })
+                        }
+                      >
+                        ↓
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Remove ${option.name || `option ${index + 1}`}`}
+                        onClick={() =>
+                          setPriceOptions((current) =>
+                            current.filter(
+                              (_, entryIndex) => entryIndex !== index,
+                            ),
+                          )
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() =>
+                    setPriceOptions((current) => [
+                      ...current,
+                      { name: "", price: "" },
+                    ])
+                  }
+                >
+                  + Add option
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Switching modes does not delete the saved fixed price or saved
+                  options. Removed options are retired from future sales only.
+                </p>
+              </div>
+            )}
+          </fieldset>
           <div className="space-y-3 rounded-md border bg-muted/30 p-3 text-sm">
             <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
               Selling state
@@ -379,7 +585,9 @@ function MenuItemRow({
         {item.categoryName}
       </span>
       <span className="text-left tabular-nums font-black sm:text-right">
-        {formatGhs(item.sellingPriceMinor)}
+        {item.pricingMode === "fixed"
+          ? formatGhs(item.sellingPriceMinor)
+          : `${item.priceOptions.length} option${item.priceOptions.length === 1 ? "" : "s"}${item.priceOptions.length ? ` · from ${formatGhs(Math.min(...item.priceOptions.map((option) => option.priceMinor)))}` : ""}`}
       </span>
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge

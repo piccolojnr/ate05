@@ -5,7 +5,11 @@ import {
   calculateKitchenDeltas,
   multiplyMoney,
   money,
+  validateMenuPricing,
+  type MenuPriceOption,
+  type MenuPriceOptionInput,
   type OrderType,
+  type PricingMode,
 } from "@ate05/domain";
 
 export type KitchenTicketType = "initial" | "addition" | "cancellation";
@@ -45,6 +49,8 @@ export interface PosMenuItem {
   name: string;
   description: string | null;
   sellingPriceMinor: number;
+  pricingMode: PricingMode;
+  priceOptions: MenuPriceOption[];
   available?: boolean;
   active?: boolean;
   updatedAt?: string;
@@ -74,6 +80,8 @@ export interface PosOrderItem {
   id: string;
   menuItemId: string | null;
   name: string;
+  priceOptionId: string | null;
+  priceOptionName: string | null;
   unitPriceMinor: number;
   quantity: number;
   lineTotalMinor: number;
@@ -106,6 +114,7 @@ export interface AddMenuItemInput {
   businessId: string;
   createdBy: string;
   menuItemId: string;
+  priceOptionId?: string;
   orderType: OrderType;
   tableId?: string | null;
   orderId?: string;
@@ -267,6 +276,81 @@ const mutableOrderStatuses = "('open', 'sent_to_kitchen', 'preparing')";
  * so item snapshots and persisted totals always move together.
  */
 export function createPosService(sqlite: Database.Database) {
+  function priceOptionsByItem(businessId: string) {
+    const rows = sqlite
+      .prepare(
+        "SELECT id, menu_item_id AS menuItemId, name, price_minor AS priceMinor, sort_order AS sortOrder, active FROM menu_item_price_options WHERE business_id = ? AND active = 1 ORDER BY menu_item_id, sort_order, name",
+      )
+      .all(businessId) as Array<{
+      id: string;
+      menuItemId: string;
+      name: string;
+      priceMinor: number;
+      sortOrder: number;
+      active: number;
+    }>;
+    const grouped = new Map<string, MenuPriceOption[]>();
+    for (const row of rows) {
+      const options = grouped.get(row.menuItemId) ?? [];
+      options.push({
+        id: row.id,
+        name: row.name,
+        priceMinor: row.priceMinor,
+        sortOrder: row.sortOrder,
+        active: Boolean(row.active),
+      });
+      grouped.set(row.menuItemId, options);
+    }
+    return grouped;
+  }
+
+  function savePriceOptions(
+    businessId: string,
+    menuItemId: string,
+    options: MenuPriceOptionInput[],
+    updatedAt: string,
+  ) {
+    sqlite
+      .prepare(
+        "UPDATE menu_item_price_options SET active = 0, updated_at = ? WHERE menu_item_id = ? AND business_id = ?",
+      )
+      .run(updatedAt, menuItemId, businessId);
+    const update = sqlite.prepare(
+      "UPDATE menu_item_price_options SET name = ?, price_minor = ?, sort_order = ?, active = 1, updated_at = ? WHERE id = ? AND menu_item_id = ? AND business_id = ?",
+    );
+    const insert = sqlite.prepare(
+      "INSERT INTO menu_item_price_options (id, business_id, menu_item_id, name, price_minor, sort_order, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+    );
+    options.forEach((option, sortOrder) => {
+      if (option.id) {
+        const result = update.run(
+          option.name.trim(),
+          option.priceMinor,
+          sortOrder,
+          updatedAt,
+          option.id,
+          menuItemId,
+          businessId,
+        );
+        if (result.changes !== 1)
+          throw new Error(
+            "A price option no longer belongs to this menu item.",
+          );
+      } else {
+        insert.run(
+          randomUUID(),
+          businessId,
+          menuItemId,
+          option.name.trim(),
+          option.priceMinor,
+          sortOrder,
+          updatedAt,
+          updatedAt,
+        );
+      }
+    });
+  }
+
   function getMenu(businessId: string) {
     const categories = sqlite
       .prepare(
@@ -275,7 +359,7 @@ export function createPosService(sqlite: Database.Database) {
       .all(businessId) as PosMenuCategory[];
     const items = sqlite
       .prepare(
-        "SELECT i.id, i.category_id AS categoryId, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.available, i.active, i.updated_at AS updatedAt FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = ? AND i.active = 1 AND i.available = 1 AND c.active = 1 ORDER BY i.name",
+        "SELECT i.id, i.category_id AS categoryId, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.pricing_mode AS pricingMode, i.available, i.active, i.updated_at AS updatedAt FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = ? AND i.active = 1 AND i.available = 1 AND c.active = 1 ORDER BY i.name",
       )
       .all(businessId) as Array<{
       id: string;
@@ -283,14 +367,17 @@ export function createPosService(sqlite: Database.Database) {
       name: string;
       description: string | null;
       sellingPriceMinor: number;
+      pricingMode: PricingMode;
       available: number;
       active: number;
       updatedAt: string;
     }>;
+    const options = priceOptionsByItem(businessId);
     return {
       categories,
       items: items.map((item) => ({
         ...item,
+        priceOptions: options.get(item.id) ?? [],
         available: Boolean(item.available),
         active: Boolean(item.active),
       })),
@@ -305,7 +392,7 @@ export function createPosService(sqlite: Database.Database) {
       .all(businessId) as Array<PosMenuCategory & { active: number }>;
     const items = sqlite
       .prepare(
-        "SELECT i.id, i.category_id AS categoryId, c.name AS categoryName, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.available, i.active, i.updated_at AS updatedAt FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = ? ORDER BY i.active DESC, i.name",
+        "SELECT i.id, i.category_id AS categoryId, c.name AS categoryName, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.pricing_mode AS pricingMode, i.available, i.active, i.updated_at AS updatedAt FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = ? ORDER BY i.active DESC, i.name",
       )
       .all(businessId) as Array<{
       id: string;
@@ -314,10 +401,12 @@ export function createPosService(sqlite: Database.Database) {
       name: string;
       description: string | null;
       sellingPriceMinor: number;
+      pricingMode: PricingMode;
       available: number;
       active: number;
       updatedAt: string;
     }>;
+    const options = priceOptionsByItem(businessId);
     return {
       categories: categories.map((category) => ({
         ...category,
@@ -325,6 +414,7 @@ export function createPosService(sqlite: Database.Database) {
       })),
       items: items.map((item) => ({
         ...item,
+        priceOptions: options.get(item.id) ?? [],
         available: Boolean(item.available),
         active: Boolean(item.active),
       })),
@@ -337,15 +427,19 @@ export function createPosService(sqlite: Database.Database) {
     description?: string | null;
     categoryId: string;
     sellingPriceMinor: number;
+    pricingMode?: PricingMode;
+    priceOptions?: MenuPriceOptionInput[];
     available: boolean;
     active: boolean;
   }): MenuManagementItem {
     if (!input.name.trim()) throw new Error("Menu item name is required.");
-    if (
-      !Number.isSafeInteger(input.sellingPriceMinor) ||
-      input.sellingPriceMinor < 0
-    )
-      throw new Error("Price must be a valid non-negative amount.");
+    const pricingMode = input.pricingMode ?? "fixed";
+    const priceOptions = input.priceOptions ?? [];
+    validateMenuPricing({
+      pricingMode,
+      sellingPriceMinor: input.sellingPriceMinor,
+      priceOptions,
+    });
     const id = randomUUID();
     const createdAt = now();
     sqlite.transaction(() => {
@@ -357,7 +451,7 @@ export function createPosService(sqlite: Database.Database) {
       if (!category) throw new Error("The selected category is unavailable.");
       sqlite
         .prepare(
-          "INSERT INTO menu_items (id, business_id, category_id, name, description, selling_price_minor, available, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO menu_items (id, business_id, category_id, name, description, selling_price_minor, pricing_mode, available, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .run(
           id,
@@ -366,11 +460,13 @@ export function createPosService(sqlite: Database.Database) {
           input.name.trim(),
           input.description?.trim() || null,
           input.sellingPriceMinor,
+          pricingMode,
           input.available ? 1 : 0,
           input.active ? 1 : 0,
           createdAt,
           createdAt,
         );
+      savePriceOptions(input.businessId, id, priceOptions, createdAt);
     })();
     return listMenuManagement(input.businessId).items.find(
       (item) => item.id === id,
@@ -384,15 +480,19 @@ export function createPosService(sqlite: Database.Database) {
     description?: string | null;
     categoryId: string;
     sellingPriceMinor: number;
+    pricingMode?: PricingMode;
+    priceOptions?: MenuPriceOptionInput[];
     available: boolean;
     active: boolean;
   }): MenuManagementItem {
     if (!input.name.trim()) throw new Error("Menu item name is required.");
-    if (
-      !Number.isSafeInteger(input.sellingPriceMinor) ||
-      input.sellingPriceMinor < 0
-    )
-      throw new Error("Price must be a valid non-negative amount.");
+    const pricingMode = input.pricingMode ?? "fixed";
+    const priceOptions = input.priceOptions ?? [];
+    validateMenuPricing({
+      pricingMode,
+      sellingPriceMinor: input.sellingPriceMinor,
+      priceOptions,
+    });
     const updatedAt = now();
     sqlite.transaction(() => {
       const category = sqlite
@@ -403,13 +503,14 @@ export function createPosService(sqlite: Database.Database) {
       if (!category) throw new Error("The selected category is unavailable.");
       const result = sqlite
         .prepare(
-          "UPDATE menu_items SET name = ?, description = ?, category_id = ?, selling_price_minor = ?, available = ?, active = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+          "UPDATE menu_items SET name = ?, description = ?, category_id = ?, selling_price_minor = ?, pricing_mode = ?, available = ?, active = ?, updated_at = ? WHERE id = ? AND business_id = ?",
         )
         .run(
           input.name.trim(),
           input.description?.trim() || null,
           input.categoryId,
           input.sellingPriceMinor,
+          pricingMode,
           input.available ? 1 : 0,
           input.active ? 1 : 0,
           updatedAt,
@@ -417,6 +518,8 @@ export function createPosService(sqlite: Database.Database) {
           input.businessId,
         );
       if (result.changes !== 1) throw new Error("Menu item not found.");
+      if (input.priceOptions !== undefined || pricingMode === "options")
+        savePriceOptions(input.businessId, input.id, priceOptions, updatedAt);
     })();
     return listMenuManagement(input.businessId).items.find(
       (item) => item.id === input.id,
@@ -693,11 +796,41 @@ export function createPosService(sqlite: Database.Database) {
     sqlite.transaction(() => {
       const menuItem = sqlite
         .prepare(
-          "SELECT id, name, selling_price_minor AS sellingPriceMinor FROM menu_items WHERE id = ? AND business_id = ? AND active = 1 AND available = 1",
+          "SELECT id, name, selling_price_minor AS sellingPriceMinor, pricing_mode AS pricingMode FROM menu_items WHERE id = ? AND business_id = ? AND active = 1 AND available = 1",
         )
         .get(input.menuItemId, input.businessId) as
-        { id: string; name: string; sellingPriceMinor: number } | undefined;
+        | {
+            id: string;
+            name: string;
+            sellingPriceMinor: number;
+            pricingMode: PricingMode;
+          }
+        | undefined;
       if (!menuItem) throw new Error("This menu item is unavailable.");
+      let selectedOption: {
+        id: string;
+        name: string;
+        priceMinor: number;
+      } | null = null;
+      if (menuItem.pricingMode === "options") {
+        if (!input.priceOptionId)
+          throw new Error("Choose a price option before adding this item.");
+        selectedOption = sqlite
+          .prepare(
+            "SELECT id, name, price_minor AS priceMinor FROM menu_item_price_options WHERE id = ? AND menu_item_id = ? AND business_id = ? AND active = 1",
+          )
+          .get(input.priceOptionId, menuItem.id, input.businessId) as {
+          id: string;
+          name: string;
+          priceMinor: number;
+        } | null;
+        if (!selectedOption)
+          throw new Error("This price option is unavailable.");
+      } else if (input.priceOptionId) {
+        throw new Error("Fixed-price items do not use price options.");
+      }
+      const unitPriceMinor =
+        selectedOption?.priceMinor ?? menuItem.sellingPriceMinor;
       if (!orderId) orderId = createOrder(input).id;
       const order = sqlite
         .prepare(
@@ -712,9 +845,17 @@ export function createPosService(sqlite: Database.Database) {
         throw new Error("This order can no longer be changed.");
       const existing = sqlite
         .prepare(
-          "SELECT id, quantity, unit_price_minor_snapshot AS unitPriceMinor FROM order_items WHERE order_id = ? AND menu_item_id = ? AND notes IS NULL",
+          selectedOption
+            ? "SELECT id, quantity, unit_price_minor_snapshot AS unitPriceMinor FROM order_items WHERE order_id = ? AND menu_item_id = ? AND price_option_id = ? AND price_option_name_snapshot = ? AND unit_price_minor_snapshot = ? AND notes IS NULL"
+            : "SELECT id, quantity, unit_price_minor_snapshot AS unitPriceMinor FROM order_items WHERE order_id = ? AND menu_item_id = ? AND price_option_id IS NULL AND price_option_name_snapshot IS NULL AND notes IS NULL",
         )
-        .get(orderId, input.menuItemId) as
+        .get(
+          orderId,
+          input.menuItemId,
+          ...(selectedOption
+            ? [selectedOption.id, selectedOption.name, unitPriceMinor]
+            : []),
+        ) as
         { id: string; quantity: number; unitPriceMinor: number } | undefined;
       const timestamp = now();
       if (existing) {
@@ -732,16 +873,18 @@ export function createPosService(sqlite: Database.Database) {
       } else {
         sqlite
           .prepare(
-            "INSERT INTO order_items (id, business_id, order_id, menu_item_id, item_name_snapshot, unit_price_minor_snapshot, quantity, line_total_minor, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+            "INSERT INTO order_items (id, business_id, order_id, menu_item_id, price_option_id, item_name_snapshot, price_option_name_snapshot, unit_price_minor_snapshot, quantity, line_total_minor, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
           )
           .run(
             randomUUID(),
             input.businessId,
             orderId,
             menuItem.id,
+            selectedOption?.id ?? null,
             menuItem.name,
-            menuItem.sellingPriceMinor,
-            menuItem.sellingPriceMinor,
+            selectedOption?.name ?? null,
+            unitPriceMinor,
+            unitPriceMinor,
             timestamp,
             timestamp,
           );
@@ -810,7 +953,7 @@ export function createPosService(sqlite: Database.Database) {
     if (!order) throw new Error("Order not found.");
     order.items = sqlite
       .prepare(
-        "SELECT id, menu_item_id AS menuItemId, item_name_snapshot AS name, unit_price_minor_snapshot AS unitPriceMinor, quantity, line_total_minor AS lineTotalMinor, notes FROM order_items WHERE order_id = ? ORDER BY created_at, id",
+        "SELECT id, menu_item_id AS menuItemId, price_option_id AS priceOptionId, item_name_snapshot AS name, price_option_name_snapshot AS priceOptionName, unit_price_minor_snapshot AS unitPriceMinor, quantity, line_total_minor AS lineTotalMinor, notes FROM order_items WHERE order_id = ? ORDER BY created_at, id",
       )
       .all(orderId) as PosOrderItem[];
     const kitchenTickets = listKitchenTickets(orderId, businessId);
@@ -1095,7 +1238,7 @@ export function createPosService(sqlite: Database.Database) {
   function getKitchenSyncLines(orderId: string, businessId: string) {
     const current = sqlite
       .prepare(
-        `SELECT oi.id AS orderItemId, oi.item_name_snapshot AS itemName, oi.quantity, oi.notes
+        `SELECT oi.id AS orderItemId, CASE WHEN oi.price_option_name_snapshot IS NULL THEN oi.item_name_snapshot ELSE oi.item_name_snapshot || ' — ' || oi.price_option_name_snapshot END AS itemName, oi.quantity, oi.notes
          FROM order_items oi JOIN orders o ON o.id = oi.order_id
          WHERE oi.order_id = ? AND o.business_id = ?`,
       )

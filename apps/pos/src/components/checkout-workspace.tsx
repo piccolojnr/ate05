@@ -63,6 +63,11 @@ function CheckoutOrderSummary({ order }: { order: PosOrder }) {
               <p className="font-semibold">
                 {item.quantity} × {item.name}
               </p>
+              {item.priceOptionName ? (
+                <p className="text-xs font-semibold text-primary">
+                  {item.priceOptionName}
+                </p>
+              ) : null}
               <p className="text-xs text-muted-foreground">
                 {formatGhs(item.unitPriceMinor)} each
                 {item.notes ? ` · ${item.notes}` : ""}

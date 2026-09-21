@@ -5,13 +5,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CURRENT_SCHEMA_VERSION: i64 = 5;
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 const AUTOMATIC_RETENTION: usize = 14;
-const EXPECTED_TABLES: [&str; 16] = [
+const EXPECTED_TABLES: [&str; 17] = [
     "businesses",
     "users",
     "menu_categories",
     "menu_items",
+    "menu_item_price_options",
     "restaurant_tables",
     "orders",
     "order_items",
@@ -157,7 +158,9 @@ pub async fn validate(path: &Path) -> Result<BackupInfo, String> {
             .await
             .map_err(|error| format!("invalid_backup: schema check failed ({error})"))?;
             if exists.is_none() {
-                if table == "print_attempts" && version < CURRENT_SCHEMA_VERSION {
+                if (table == "print_attempts" && version < 4)
+                    || (table == "menu_item_price_options" && version < 6)
+                {
                     continue;
                 }
                 return Err(format!(
@@ -407,7 +410,7 @@ mod tests {
                 .await
                 .unwrap();
             assert!(info.valid);
-            assert_eq!(info.schema_version, 5);
+            assert_eq!(info.schema_version, 6);
             let backup_path = root.join("backups").join(info.file_name);
             let backup_pool = database::connect(&backup_path).await.unwrap();
             let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM businesses")

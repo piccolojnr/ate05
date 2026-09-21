@@ -2,6 +2,7 @@ import type { PaperWidth } from "../index";
 
 export interface ReceiptPrintItem {
   name: string;
+  priceOptionName?: string | null;
   quantity: number;
   unitPriceMinor: number;
   lineTotalMinor: number;
@@ -66,7 +67,10 @@ export function formatReceipt(
     separator,
   ];
   for (const item of receipt.items) {
-    lines.push(fit(item.quantity + " x " + item.name, width));
+    const name = item.priceOptionName
+      ? `${item.name} — ${item.priceOptionName}`
+      : item.name;
+    lines.push(fit(item.quantity + " x " + name, width));
     lines.push(row("", money(item.lineTotalMinor), width));
   }
   lines.push(

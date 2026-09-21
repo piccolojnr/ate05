@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   createDatabase,
   createMenuRepository,
@@ -29,6 +30,68 @@ function insertOrder(id = "00000000-0000-4000-8000-000000000100") {
 }
 
 describe("ATE05 SQLite database", () => {
+  it("migrates existing menu items to fixed pricing without changing prices or orders", () => {
+    const legacy = createDatabase();
+    const migration = (name: string) =>
+      readFileSync(
+        new URL(`../drizzle/${name}`, import.meta.url),
+        "utf8",
+      ).replaceAll("--> statement-breakpoint", "");
+    try {
+      legacy.sqlite.exec(migration("0000_clumsy_human_torch.sql"));
+      legacy.sqlite
+        .prepare(
+          "INSERT INTO businesses (id, name, active, created_at, updated_at) VALUES ('legacy-business', 'Legacy', 1, ?, ?)",
+        )
+        .run(timestamp, timestamp);
+      legacy.sqlite
+        .prepare(
+          "INSERT INTO menu_categories (id, business_id, name, sort_order, active, created_at, updated_at) VALUES ('legacy-category', 'legacy-business', 'Mains', 1, 1, ?, ?)",
+        )
+        .run(timestamp, timestamp);
+      legacy.sqlite
+        .prepare(
+          "INSERT INTO menu_items (id, business_id, category_id, name, selling_price_minor, available, active, created_at, updated_at) VALUES ('legacy-item', 'legacy-business', 'legacy-category', 'Legacy Tilapia', 11000, 1, 1, ?, ?)",
+        )
+        .run(timestamp, timestamp);
+      legacy.sqlite
+        .prepare(
+          "INSERT INTO orders (id, business_id, order_number, order_type, status, payment_status, subtotal_minor, discount_minor, total_minor, opened_at, created_at, updated_at) VALUES ('legacy-order', 'legacy-business', 1, 'takeaway', 'completed', 'paid', 11000, 0, 11000, ?, ?, ?)",
+        )
+        .run(timestamp, timestamp, timestamp);
+      legacy.sqlite
+        .prepare(
+          "INSERT INTO order_items (id, business_id, order_id, menu_item_id, item_name_snapshot, unit_price_minor_snapshot, quantity, line_total_minor, created_at, updated_at) VALUES ('legacy-line', 'legacy-business', 'legacy-order', 'legacy-item', 'Legacy Tilapia', 11000, 1, 11000, ?, ?)",
+        )
+        .run(timestamp, timestamp);
+
+      legacy.sqlite.exec(migration("0005_menu_price_options.sql"));
+
+      expect(
+        legacy.sqlite
+          .prepare(
+            "SELECT pricing_mode, selling_price_minor FROM menu_items WHERE id = 'legacy-item'",
+          )
+          .get(),
+      ).toEqual({ pricing_mode: "fixed", selling_price_minor: 11000 });
+      expect(
+        legacy.sqlite
+          .prepare(
+            "SELECT item_name_snapshot, unit_price_minor_snapshot, price_option_id, price_option_name_snapshot FROM order_items WHERE id = 'legacy-line'",
+          )
+          .get(),
+      ).toEqual({
+        item_name_snapshot: "Legacy Tilapia",
+        unit_price_minor_snapshot: 11000,
+        price_option_id: null,
+        price_option_name_snapshot: null,
+      });
+      expect(legacy.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      legacy.sqlite.close();
+    }
+  });
+
   it("migrates a fresh database and seeds development fixtures", () => {
     const tables = database.sqlite
       .prepare(

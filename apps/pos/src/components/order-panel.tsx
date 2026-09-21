@@ -55,6 +55,11 @@ function OrderItemRow({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="font-bold leading-tight">{line.name}</p>
+          {line.priceOptionName ? (
+            <p className="mt-0.5 text-xs font-semibold text-primary">
+              {line.priceOptionName}
+            </p>
+          ) : null}
           <p className="mt-1 text-xs text-muted-foreground">
             {formatGhs(line.unitPriceMinor)} each
           </p>

@@ -216,6 +216,297 @@ describe("POS application service", () => {
     ).toThrow("Price");
   });
 
+  it("validates, persists, updates, retires, and restores named price options", () => {
+    const category = service.listMenuManagement(business).categories[0]!;
+    expect(() =>
+      service.createMenuItem({
+        businessId: business,
+        name: "Invalid options",
+        categoryId: category.id,
+        sellingPriceMinor: 0,
+        pricingMode: "options",
+        priceOptions: [],
+        available: true,
+        active: true,
+      }),
+    ).toThrow("at least one");
+    expect(() =>
+      service.createMenuItem({
+        businessId: business,
+        name: "Duplicate options",
+        categoryId: category.id,
+        sellingPriceMinor: 0,
+        pricingMode: "options",
+        priceOptions: [
+          { name: " Large ", priceMinor: 11000 },
+          { name: "large", priceMinor: 12000 },
+        ],
+        available: true,
+        active: true,
+      }),
+    ).toThrow("unique");
+
+    const created = service.createMenuItem({
+      businessId: business,
+      name: "Tilapia",
+      categoryId: category.id,
+      sellingPriceMinor: 7500,
+      pricingMode: "options",
+      priceOptions: [
+        { name: "Small", priceMinor: 6000 },
+        { name: "Large", priceMinor: 11000 },
+      ],
+      available: true,
+      active: true,
+    });
+    expect(created).toMatchObject({
+      pricingMode: "options",
+      sellingPriceMinor: 7500,
+      priceOptions: [
+        expect.objectContaining({
+          name: "Small",
+          priceMinor: 6000,
+          sortOrder: 0,
+        }),
+        expect.objectContaining({
+          name: "Large",
+          priceMinor: 11000,
+          sortOrder: 1,
+        }),
+      ],
+    });
+    const large = created.priceOptions.find(
+      (option) => option.name === "Large",
+    )!;
+    const updated = service.updateMenuItem({
+      businessId: business,
+      id: created.id,
+      name: created.name,
+      categoryId: created.categoryId,
+      sellingPriceMinor: created.sellingPriceMinor,
+      pricingMode: "options",
+      priceOptions: [{ id: large.id, name: "Family", priceMinor: 12500 }],
+      available: true,
+      active: true,
+    });
+    expect(updated.priceOptions).toEqual([
+      expect.objectContaining({
+        id: large.id,
+        name: "Family",
+        priceMinor: 12500,
+      }),
+    ]);
+    expect(
+      database.sqlite
+        .prepare(
+          "SELECT name, active FROM menu_item_price_options WHERE menu_item_id = ? ORDER BY name",
+        )
+        .all(created.id),
+    ).toEqual([
+      { name: "Family", active: 1 },
+      { name: "Small", active: 0 },
+    ]);
+
+    const fixed = service.updateMenuItem({
+      businessId: business,
+      id: created.id,
+      name: created.name,
+      categoryId: created.categoryId,
+      sellingPriceMinor: 8000,
+      pricingMode: "fixed",
+      priceOptions: updated.priceOptions,
+      available: true,
+      active: true,
+    });
+    expect(fixed).toMatchObject({
+      pricingMode: "fixed",
+      sellingPriceMinor: 8000,
+    });
+    const restored = service.updateMenuItem({
+      businessId: business,
+      id: created.id,
+      name: created.name,
+      categoryId: created.categoryId,
+      sellingPriceMinor: fixed.sellingPriceMinor,
+      pricingMode: "options",
+      priceOptions: fixed.priceOptions,
+      available: true,
+      active: true,
+    });
+    expect(restored.priceOptions[0]).toMatchObject({
+      id: large.id,
+      name: "Family",
+      priceMinor: 12500,
+    });
+  });
+
+  it("keeps option lines distinct and snapshots option names and charged prices", () => {
+    const category = service.listMenuManagement(business).categories[0]!;
+    const tilapia = service.createMenuItem({
+      businessId: business,
+      name: "Tilapia",
+      categoryId: category.id,
+      sellingPriceMinor: 0,
+      pricingMode: "options",
+      priceOptions: [
+        { name: "Small", priceMinor: 6000 },
+        { name: "Large", priceMinor: 11000 },
+      ],
+      available: true,
+      active: true,
+    });
+    const small = tilapia.priceOptions[0]!;
+    const large = tilapia.priceOptions[1]!;
+    expect(() =>
+      service.addMenuItem({
+        businessId: business,
+        createdBy: owner,
+        menuItemId: tilapia.id,
+        orderType: "takeaway",
+      }),
+    ).toThrow("Choose a price option");
+    let order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: tilapia.id,
+      priceOptionId: small.id,
+      orderType: "takeaway",
+    });
+    order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      orderId: order.id,
+      menuItemId: tilapia.id,
+      priceOptionId: large.id,
+      orderType: "takeaway",
+    });
+    order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      orderId: order.id,
+      menuItemId: tilapia.id,
+      priceOptionId: large.id,
+      orderType: "takeaway",
+    });
+    expect(order.items).toEqual([
+      expect.objectContaining({
+        priceOptionId: small.id,
+        priceOptionName: "Small",
+        unitPriceMinor: 6000,
+        quantity: 1,
+      }),
+      expect.objectContaining({
+        priceOptionId: large.id,
+        priceOptionName: "Large",
+        unitPriceMinor: 11000,
+        quantity: 2,
+      }),
+    ]);
+    expect(order.totalMinor).toBe(28000);
+
+    service.updateMenuItem({
+      businessId: business,
+      id: tilapia.id,
+      name: tilapia.name,
+      categoryId: tilapia.categoryId,
+      sellingPriceMinor: tilapia.sellingPriceMinor,
+      pricingMode: "options",
+      priceOptions: [
+        { id: small.id, name: "Small", priceMinor: 6500 },
+        { id: large.id, name: "Family", priceMinor: 12500 },
+      ],
+      available: true,
+      active: true,
+    });
+    const historical = service.getOrder(order.id, business);
+    expect(historical.totalMinor).toBe(28000);
+    expect(historical.items[1]).toMatchObject({
+      priceOptionName: "Large",
+      unitPriceMinor: 11000,
+      quantity: 2,
+    });
+    const newOrder = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: tilapia.id,
+      priceOptionId: large.id,
+      orderType: "takeaway",
+    });
+    expect(newOrder.items[0]).toMatchObject({
+      priceOptionName: "Family",
+      unitPriceMinor: 12500,
+    });
+    const kitchen = service.sendOrderToKitchen({
+      businessId: business,
+      orderId: order.id,
+      userId: owner,
+    });
+    expect(kitchen.kitchenTickets[0]!.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ itemName: "Tilapia — Large" }),
+      ]),
+    );
+  });
+
+  it("does not merge a physically deleted option snapshot into a new fixed line", () => {
+    const category = service.listMenuManagement(business).categories[0]!;
+    const tilapia = service.createMenuItem({
+      businessId: business,
+      name: "Tilapia",
+      categoryId: category.id,
+      sellingPriceMinor: 9000,
+      pricingMode: "options",
+      priceOptions: [{ name: "Large", priceMinor: 11000 }],
+      available: true,
+      active: true,
+    });
+    const large = tilapia.priceOptions[0]!;
+    let order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      menuItemId: tilapia.id,
+      priceOptionId: large.id,
+      orderType: "takeaway",
+    });
+
+    database.sqlite
+      .prepare("DELETE FROM menu_item_price_options WHERE id = ?")
+      .run(large.id);
+    service.updateMenuItem({
+      businessId: business,
+      id: tilapia.id,
+      name: tilapia.name,
+      categoryId: tilapia.categoryId,
+      sellingPriceMinor: 9000,
+      pricingMode: "fixed",
+      available: true,
+      active: true,
+    });
+    order = service.addMenuItem({
+      businessId: business,
+      createdBy: owner,
+      orderId: order.id,
+      menuItemId: tilapia.id,
+      orderType: "takeaway",
+    });
+
+    expect(order.items).toEqual([
+      expect.objectContaining({
+        priceOptionId: null,
+        priceOptionName: "Large",
+        unitPriceMinor: 11000,
+        quantity: 1,
+      }),
+      expect.objectContaining({
+        priceOptionId: null,
+        priceOptionName: null,
+        unitPriceMinor: 9000,
+        quantity: 1,
+      }),
+    ]);
+    expect(order.totalMinor).toBe(20000);
+  });
+
   it("does not deactivate a category that still owns active items", () => {
     const category = service
       .listMenuManagement(business)

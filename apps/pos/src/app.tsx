@@ -152,6 +152,12 @@ export function App() {
         description: item.description,
         categoryId: item.categoryId,
         sellingPriceMinor: item.sellingPriceMinor,
+        pricingMode: item.pricingMode,
+        priceOptions: item.priceOptions.map((option) => ({
+          id: option.id,
+          name: option.name,
+          priceMinor: option.priceMinor,
+        })),
         available: !item.available,
         active: item.active,
       });
@@ -280,11 +286,12 @@ export function App() {
       window.removeEventListener("keydown", reset);
     };
   }, [session]);
-  async function addItem(menuItemId: string) {
+  async function addItem(menuItemId: string, priceOptionId?: string) {
     try {
       const updated = await client.addMenuItem({
         orderId: order?.id,
         menuItemId,
+        priceOptionId,
         orderType,
         tableId,
       });

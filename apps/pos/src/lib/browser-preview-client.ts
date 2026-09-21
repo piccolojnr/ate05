@@ -19,7 +19,11 @@ import type {
   StockMovement,
 } from "./pos-client";
 import type { PaperWidth } from "@ate05/printing";
-import { calculateKitchenDeltas, type KitchenSyncLine } from "@ate05/domain";
+import {
+  calculateKitchenDeltas,
+  validateMenuPricing,
+  type KitchenSyncLine,
+} from "@ate05/domain";
 import { PosClientError } from "./client-errors";
 
 const storageKey = "ate05-pos-browser-preview-v1";
@@ -54,6 +58,8 @@ const items: MenuItem[] = [
     name: "Fried Rice",
     description: null,
     sellingPriceMinor: 5000,
+    pricingMode: "fixed",
+    priceOptions: [],
   },
   {
     id: "00000000-0000-4000-8000-000000000021",
@@ -61,6 +67,8 @@ const items: MenuItem[] = [
     name: "Jollof Rice",
     description: null,
     sellingPriceMinor: 4500,
+    pricingMode: "fixed",
+    priceOptions: [],
   },
   {
     id: "00000000-0000-4000-8000-000000000022",
@@ -68,6 +76,8 @@ const items: MenuItem[] = [
     name: "Chicken Wings",
     description: null,
     sellingPriceMinor: 3500,
+    pricingMode: "fixed",
+    priceOptions: [],
   },
   {
     id: "00000000-0000-4000-8000-000000000023",
@@ -75,6 +85,8 @@ const items: MenuItem[] = [
     name: "Coke",
     description: null,
     sellingPriceMinor: 1200,
+    pricingMode: "fixed",
+    priceOptions: [],
   },
 ];
 const tables: RestaurantTable[] = [1, 2, 3, 4].map((number) => ({
@@ -113,7 +125,15 @@ function readState(): PreviewState {
     active: true,
     updatedAt: new Date().toISOString(),
   }));
+  for (const item of state.menuItems) {
+    item.pricingMode ??= "fixed";
+    item.priceOptions ??= [];
+  }
   for (const order of state.orders) {
+    for (const item of order.items) {
+      item.priceOptionId ??= null;
+      item.priceOptionName ??= null;
+    }
     order.amountPaidMinor ??=
       order.receipt?.payments.reduce(
         (sum, payment) => sum + payment.amountMinor,
@@ -196,7 +216,9 @@ function kitchenSyncLines(order: PosOrder): KitchenSyncLine[] {
     const previous = sent.get(item.id);
     return {
       orderItemId: item.id,
-      itemName: item.name,
+      itemName: item.priceOptionName
+        ? `${item.name} — ${item.priceOptionName}`
+        : item.name,
       quantity: item.quantity,
       notes: item.notes,
       sentQuantity: previous?.quantity ?? 0,
@@ -466,14 +488,20 @@ export function createBrowserPreviewClient(): PosClient {
         businessId,
         createdBy: actorId(),
         categories: menuCategories.filter((category) => category.active),
-        items: menuItems.filter(
-          (item) =>
-            item.active &&
-            item.available &&
-            menuCategories.some(
-              (category) => category.id === item.categoryId && category.active,
-            ),
-        ),
+        items: menuItems
+          .filter(
+            (item) =>
+              item.active &&
+              item.available &&
+              menuCategories.some(
+                (category) =>
+                  category.id === item.categoryId && category.active,
+              ),
+          )
+          .map((item) => ({
+            ...item,
+            priceOptions: item.priceOptions.filter((option) => option.active),
+          })),
         tables: state.tables!.map((table) => ({
           ...table,
           status: occupied.has(table.id) ? "occupied" : table.status,
@@ -520,6 +548,7 @@ export function createBrowserPreviewClient(): PosClient {
         ),
         items: state.menuItems!.map((item) => ({
           ...item,
+          priceOptions: item.priceOptions.filter((option) => option.active),
           categoryName:
             state.menuCategories!.find(
               (category) => category.id === item.categoryId,
@@ -530,11 +559,7 @@ export function createBrowserPreviewClient(): PosClient {
     async createMenuItem(input) {
       requirePermission("menu");
       if (!input.name.trim()) throw new Error("Menu item name is required.");
-      if (
-        !Number.isSafeInteger(input.sellingPriceMinor) ||
-        input.sellingPriceMinor < 0
-      )
-        throw new Error("Price must be a valid non-negative amount.");
+      validateMenuPricing(input);
       const state = readState();
       const category = state.menuCategories!.find(
         (entry) => entry.id === input.categoryId && entry.active,
@@ -546,6 +571,14 @@ export function createBrowserPreviewClient(): PosClient {
         name: input.name.trim(),
         description: input.description?.trim() || null,
         sellingPriceMinor: input.sellingPriceMinor,
+        pricingMode: input.pricingMode,
+        priceOptions: input.priceOptions.map((option, sortOrder) => ({
+          id: option.id ?? crypto.randomUUID(),
+          name: option.name.trim(),
+          priceMinor: option.priceMinor,
+          sortOrder,
+          active: true,
+        })),
         available: input.available,
         active: input.active,
         updatedAt: new Date().toISOString(),
@@ -557,11 +590,7 @@ export function createBrowserPreviewClient(): PosClient {
     async updateMenuItem(input) {
       requirePermission("menu");
       if (!input.name.trim()) throw new Error("Menu item name is required.");
-      if (
-        !Number.isSafeInteger(input.sellingPriceMinor) ||
-        input.sellingPriceMinor < 0
-      )
-        throw new Error("Price must be a valid non-negative amount.");
+      validateMenuPricing(input);
       const state = readState();
       const item = state.menuItems!.find((entry) => entry.id === input.id);
       const category = state.menuCategories!.find(
@@ -569,17 +598,34 @@ export function createBrowserPreviewClient(): PosClient {
       );
       if (!item) throw new Error("Menu item not found.");
       if (!category) throw new Error("The selected category is unavailable.");
+      const incomingOptions = input.priceOptions.map((option, sortOrder) => ({
+        id: option.id ?? crypto.randomUUID(),
+        name: option.name.trim(),
+        priceMinor: option.priceMinor,
+        sortOrder,
+        active: true,
+      }));
+      const incomingIds = new Set(incomingOptions.map((option) => option.id));
+      const retainedOptions = item.priceOptions
+        .filter((option) => !incomingIds.has(option.id))
+        .map((option) => ({ ...option, active: false }));
       Object.assign(item, {
         name: input.name.trim(),
         description: input.description?.trim() || null,
         categoryId: input.categoryId,
         sellingPriceMinor: input.sellingPriceMinor,
+        pricingMode: input.pricingMode,
+        priceOptions: [...incomingOptions, ...retainedOptions],
         available: input.available,
         active: input.active,
         updatedAt: new Date().toISOString(),
       });
       writeState(state);
-      return { ...item, categoryName: category.name } as MenuManagementItem;
+      return {
+        ...item,
+        priceOptions: item.priceOptions.filter((option) => option.active),
+        categoryName: category.name,
+      } as MenuManagementItem;
     },
     async createMenuCategory(name) {
       requirePermission("menu");
@@ -734,6 +780,20 @@ export function createBrowserPreviewClient(): PosClient {
         (item) => item.id === input.menuItemId && item.active && item.available,
       );
       if (!menuItem) throw new Error("This menu item is unavailable.");
+      const selectedOption =
+        menuItem.pricingMode === "options"
+          ? menuItem.priceOptions.find(
+              (option) => option.id === input.priceOptionId && option.active,
+            )
+          : null;
+      if (menuItem.pricingMode === "options" && !selectedOption)
+        throw new Error(
+          "Choose an available price option before adding this item.",
+        );
+      if (menuItem.pricingMode === "fixed" && input.priceOptionId)
+        throw new Error("Fixed-price items do not use price options.");
+      const unitPriceMinor =
+        selectedOption?.priceMinor ?? menuItem.sellingPriceMinor;
       let order = input.orderId
         ? state.orders.find((entry) => entry.id === input.orderId)
         : undefined;
@@ -789,7 +849,14 @@ export function createBrowserPreviewClient(): PosClient {
       if (!["open", "sent_to_kitchen", "preparing"].includes(order.status))
         throw new Error("This order can no longer be changed.");
       const existing = order.items.find(
-        (item) => item.menuItemId === menuItem.id && !item.notes,
+        (item) =>
+          item.menuItemId === menuItem.id &&
+          !item.notes &&
+          (selectedOption
+            ? item.priceOptionId === selectedOption.id &&
+              item.priceOptionName === selectedOption.name &&
+              item.unitPriceMinor === unitPriceMinor
+            : item.priceOptionId === null && item.priceOptionName === null),
       );
       if (existing) {
         existing.quantity += 1;
@@ -799,9 +866,11 @@ export function createBrowserPreviewClient(): PosClient {
           id: crypto.randomUUID(),
           menuItemId: menuItem.id,
           name: menuItem.name,
-          unitPriceMinor: menuItem.sellingPriceMinor,
+          priceOptionId: selectedOption?.id ?? null,
+          priceOptionName: selectedOption?.name ?? null,
+          unitPriceMinor,
           quantity: 1,
-          lineTotalMinor: menuItem.sellingPriceMinor,
+          lineTotalMinor: unitPriceMinor,
           notes: null,
         });
       order = refreshOrder(order);
