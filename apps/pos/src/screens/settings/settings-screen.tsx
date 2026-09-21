@@ -10,6 +10,9 @@ import type {
   AuthUser,
   PosClient,
   PosPrinterConfig,
+  CloudBackupResult,
+  CloudStatus,
+  RemoteBackup,
 } from "../../lib/pos-client";
 
 type PrinterRole = "kitchen" | "receipt";
@@ -550,6 +553,15 @@ export function SettingsScreen({
   onSaveRecoveryKey,
   onVerifyBackup,
   onDeleteBackup,
+  cloudStatus,
+  cloudBackups,
+  recoveryKeyConfigured,
+  onConnectGoogleDrive,
+  onDisconnectGoogleDrive,
+  onSetCloudAutomatic,
+  onBackupToDrive,
+  onDeleteCloudBackup,
+  onRestoreCloudBackup,
   staff,
   onCreateStaff,
   onUpdateStaff,
@@ -570,6 +582,18 @@ export function SettingsScreen({
   onSaveRecoveryKey: (recoveryKey: string) => Promise<void>;
   onVerifyBackup: (fileName: string, recoveryKey?: string) => Promise<void>;
   onDeleteBackup: (fileName: string) => Promise<void>;
+  cloudStatus: CloudStatus | null;
+  cloudBackups: RemoteBackup[];
+  recoveryKeyConfigured: boolean;
+  onConnectGoogleDrive: () => Promise<void>;
+  onDisconnectGoogleDrive: () => Promise<void>;
+  onSetCloudAutomatic: (enabled: boolean) => Promise<void>;
+  onBackupToDrive: () => Promise<CloudBackupResult>;
+  onDeleteCloudBackup: (remoteId: string) => Promise<void>;
+  onRestoreCloudBackup: (
+    remoteId: string,
+    recoveryKey?: string,
+  ) => Promise<void>;
   staff: AuthUser[];
   onCreateStaff: (name: string, role: string, pin: string) => Promise<void>;
   onUpdateStaff: (input: {
@@ -581,9 +605,11 @@ export function SettingsScreen({
   }) => Promise<void>;
 }) {
   const [backupState, setBackupState] = useState<"idle" | "working">("idle");
+  const [cloudConnecting, setCloudConnecting] = useState(false);
   const [selectedBackup, setSelectedBackup] = useState("");
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState("");
+  const [selectedCloudBackup, setSelectedCloudBackup] = useState("");
   const [showRecoveryKey, setShowRecoveryKey] = useState(false);
   const [activeTab, setActiveTab] = useState<"staff" | "printers" | "data">(
     "printers",
@@ -838,16 +864,28 @@ export function SettingsScreen({
               ) : null}
               {native && selectedBackup && !confirmRestore ? (
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="secondary" onClick={() => void onVerifyBackup(selectedBackup, recoveryKey || undefined)}>
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      void onVerifyBackup(
+                        selectedBackup,
+                        recoveryKey || undefined,
+                      )
+                    }
+                  >
                     Verify selected
                   </Button>
-                  <Button variant="secondary" onClick={() => setConfirmRestore(true)}>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setConfirmRestore(true)}
+                  >
                     Restore selected backup
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => {
-                      if (window.confirm("Delete this backup?")) void onDeleteBackup(selectedBackup);
+                      if (window.confirm("Delete this backup?"))
+                        void onDeleteBackup(selectedBackup);
                     }}
                   >
                     Delete selected
@@ -880,7 +918,9 @@ export function SettingsScreen({
                       });
                     }}
                   >
-                    {showRecoveryKey ? "Recovery key shown" : "Set up recovery key"}
+                    {showRecoveryKey
+                      ? "Recovery key shown"
+                      : "Set up recovery key"}
                   </Button>
                   {showRecoveryKey && recoveryKey ? (
                     <Button
@@ -920,6 +960,141 @@ export function SettingsScreen({
                 </div>
               </div>
             ) : null}
+          </Card>
+          <Card className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">
+                  Cloud backup
+                </p>
+                <h2 className="mt-1 text-lg font-black">Google Drive</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Backups are encrypted on this computer before they leave it.
+                  Google Drive never receives the recovery key.
+                </p>
+              </div>
+              <Badge tone={cloudStatus?.connected ? "success" : "neutral"}>
+                {cloudStatus?.connected
+                  ? cloudStatus.status.replace("_", " ")
+                  : "Disconnected"}
+              </Badge>
+            </div>
+            {!native ? (
+              <p className="mt-4 rounded-md bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+                Native Google Drive connection and cloud backup are unavailable
+                in browser preview.
+              </p>
+            ) : !cloudStatus?.connected ? (
+              <Button
+                className="mt-4"
+                disabled={cloudConnecting}
+                onClick={() => {
+                  setCloudConnecting(true);
+                  void onConnectGoogleDrive().finally(() =>
+                    setCloudConnecting(false),
+                  );
+                }}
+              >
+                {cloudConnecting ? "Connecting…" : "Connect Google Drive"}
+              </Button>
+            ) : (
+              <>
+                <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+                  <span>
+                    Connected account:{" "}
+                    <strong>{cloudStatus.accountEmail}</strong>
+                  </span>
+                  <Button
+                    variant="secondary"
+                    onClick={() => void onDisconnectGoogleDrive()}
+                  >
+                    Disconnect
+                  </Button>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-3 border-y py-4">
+                  <label className="flex items-center gap-2 text-sm font-semibold">
+                    <Checkbox
+                      checked={cloudStatus.automaticEnabled}
+                      onChange={(event) =>
+                        void onSetCloudAutomatic(event.target.checked)
+                      }
+                    />
+                    Enable automatic cloud backup
+                  </label>
+                  <Button
+                    variant="secondary"
+                    disabled={backupState === "working"}
+                    onClick={() => void onBackupToDrive()}
+                  >
+                    Back Up to Drive Now
+                  </Button>
+                </div>
+                <div className="mt-4 flex flex-wrap items-end gap-3">
+                  <label className="min-w-64 text-sm font-semibold">
+                    Cloud backup history
+                    <Select
+                      className="mt-1 min-h-11 font-normal"
+                      value={selectedCloudBackup}
+                      onChange={(event) =>
+                        setSelectedCloudBackup(event.target.value)
+                      }
+                    >
+                      <option value="">Choose a cloud backup</option>
+                      {cloudBackups.map((backup) => (
+                        <option key={backup.remoteId} value={backup.remoteId}>
+                          {new Date(backup.createdAt).toLocaleString()} ·{" "}
+                          {backup.status}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  {selectedCloudBackup ? (
+                    <>
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          void onRestoreCloudBackup(
+                            selectedCloudBackup,
+                            recoveryKey || undefined,
+                          )
+                        }
+                      >
+                        Restore cloud backup
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          if (window.confirm("Delete this cloud backup?"))
+                            void onDeleteCloudBackup(selectedCloudBackup);
+                        }}
+                      >
+                        Delete cloud backup
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+                {selectedCloudBackup ? (
+                  <div className="mt-4 max-w-xl rounded-md border border-primary/20 bg-primary/5 p-4">
+                    <p className="font-bold">Recovery key</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {recoveryKeyConfigured
+                        ? "This computer has the recovery key in its secure credential store. Leave this blank for same-computer restore."
+                        : "This computer does not have the recovery key. Enter the key saved when this backup was created. A new key cannot decrypt an existing backup."}
+                    </p>
+                    <Input
+                      className="mt-3 font-mono text-xs"
+                      value={recoveryKey}
+                      onChange={(event) => setRecoveryKey(event.target.value)}
+                      placeholder="Paste the saved recovery key"
+                    />
+                  </div>
+                ) : null}
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Keep the recovery key separately. It is required to recover
+                  encrypted backups on a replacement computer.
+                </p>
+              </>
+            )}
           </Card>
           <Card className="p-5">
             <p className="text-xs font-bold uppercase tracking-wider text-primary">

@@ -5,6 +5,9 @@ import type {
   BackupInfo,
   RecoveryKeyStatus,
   DatabaseHealth,
+  CloudBackupResult,
+  CloudStatus,
+  RemoteBackup,
   InventoryItem,
   InventoryUnit,
   MenuCategory,
@@ -237,4 +240,15 @@ export interface RecoveryClient {
   exportBackup(): Promise<string | null>;
   databaseHealth(): Promise<DatabaseHealth>;
   restoreBackup(fileName: string, recoveryKey?: string): Promise<BackupInfo>;
+  cloudStatus(): Promise<CloudStatus>;
+  connectGoogleDrive(): Promise<CloudStatus>;
+  disconnectGoogleDrive(): Promise<void>;
+  setCloudAutomatic(enabled: boolean): Promise<CloudStatus>;
+  listCloudBackups(): Promise<RemoteBackup[]>;
+  backupToDrive(): Promise<CloudBackupResult>;
+  deleteCloudBackup(remoteId: string): Promise<void>;
+  restoreCloudBackup(
+    remoteId: string,
+    recoveryKey?: string,
+  ): Promise<BackupInfo>;
 }

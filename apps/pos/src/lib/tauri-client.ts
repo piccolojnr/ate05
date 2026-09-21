@@ -17,6 +17,9 @@ import type {
   AuthUser,
   SessionUser,
   DatabaseHealth,
+  CloudBackupResult,
+  CloudStatus,
+  RemoteBackup,
   OrderType,
   PosBootstrap,
   InventoryItem,
@@ -2169,7 +2172,10 @@ export function createTauriClient(): PosClient {
     },
     async verifyBackup(fileName, recoveryKey) {
       try {
-        return await invoke<BackupInfo>("verify_backup", { fileName, recoveryKey });
+        return await invoke<BackupInfo>("verify_backup", {
+          fileName,
+          recoveryKey,
+        });
       } catch (cause) {
         throw new PosClientError("database", String(cause));
       }
@@ -2225,10 +2231,46 @@ export function createTauriClient(): PosClient {
     async restoreBackup(fileName, recoveryKey) {
       requirePermission("backup");
       try {
-        return await invoke<BackupInfo>("restore_backup", { fileName, recoveryKey });
+        return await invoke<BackupInfo>("restore_backup", {
+          fileName,
+          recoveryKey,
+        });
       } catch (cause) {
         throw new PosClientError("database", String(cause));
       }
+    },
+    async cloudStatus() {
+      return await invoke<CloudStatus>("cloud_status");
+    },
+    async connectGoogleDrive() {
+      requirePermission("backup");
+      return await invoke<CloudStatus>("connect_google_drive");
+    },
+    async disconnectGoogleDrive() {
+      requirePermission("backup");
+      await invoke("disconnect_google_drive");
+    },
+    async setCloudAutomatic(enabled) {
+      requirePermission("backup");
+      return await invoke<CloudStatus>("set_cloud_automatic", { enabled });
+    },
+    async listCloudBackups() {
+      return await invoke<RemoteBackup[]>("list_cloud_backups");
+    },
+    async backupToDrive() {
+      requirePermission("backup");
+      return await invoke<CloudBackupResult>("backup_to_drive");
+    },
+    async deleteCloudBackup(remoteId) {
+      requirePermission("backup");
+      await invoke("delete_cloud_backup", { remoteId });
+    },
+    async restoreCloudBackup(remoteId, recoveryKey) {
+      requirePermission("backup");
+      return await invoke<BackupInfo>("restore_cloud_backup", {
+        remoteId,
+        recoveryKey,
+      });
     },
     async listInventory() {
       return listInventoryRows(await database());

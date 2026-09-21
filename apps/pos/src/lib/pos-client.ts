@@ -171,6 +171,31 @@ export interface RecoveryKeyStatus {
   configured: boolean;
 }
 
+export interface CloudStatus {
+  connected: boolean;
+  accountEmail: string | null;
+  automaticEnabled: boolean;
+  status: string;
+  lastSuccess: number | null;
+  pending: number;
+}
+
+export interface RemoteBackup {
+  remoteId: string;
+  name: string;
+  sizeBytes: number;
+  createdAt: string;
+  backupId: string | null;
+  status: string;
+}
+
+export interface CloudBackupResult {
+  localFileName: string;
+  remote: RemoteBackup | null;
+  status: string;
+  message: string;
+}
+
 export interface DatabaseHealth {
   healthy: boolean;
   schemaVersion: number;

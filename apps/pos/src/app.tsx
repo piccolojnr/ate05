@@ -18,6 +18,10 @@ import type {
   DatabaseHealth,
   SessionUser,
   AuthUser,
+  RecoveryKeyStatus,
+  CloudBackupResult,
+  CloudStatus,
+  RemoteBackup,
 } from "./lib/pos-client";
 import { formatGhs } from "./lib/pos-client";
 import { TablesScreen } from "./screens/tables/tables-screen";
@@ -48,6 +52,10 @@ export function App() {
   const [databaseHealth, setDatabaseHealth] = useState<DatabaseHealth | null>(
     null,
   );
+  const [cloudStatus, setCloudStatus] = useState<CloudStatus | null>(null);
+  const [cloudBackups, setCloudBackups] = useState<RemoteBackup[]>([]);
+  const [recoveryKeyStatus, setRecoveryKeyStatus] =
+    useState<RecoveryKeyStatus | null>(null);
   const [staff, setStaff] = useState<AuthUser[]>([]);
   const [menuManagement, setMenuManagement] =
     useState<MenuManagementData | null>(null);
@@ -84,6 +92,8 @@ export function App() {
         nextBackups,
         nextHealth,
         nextStaff,
+        nextCloud,
+        nextRecoveryKeyStatus,
       ] = await Promise.all([
         client.bootstrap(),
         client.listPrinters(),
@@ -93,6 +103,8 @@ export function App() {
         session?.permissions.includes("staff")
           ? client.listStaff()
           : Promise.resolve([]),
+        client.cloudStatus(),
+        client.recoveryKeyStatus(),
       ]);
       setBootstrap(nextBootstrap);
       setPrinters(nextPrinters);
@@ -100,6 +112,11 @@ export function App() {
       setBackups(nextBackups);
       setDatabaseHealth(nextHealth);
       setStaff(nextStaff);
+      setCloudStatus(nextCloud);
+      setRecoveryKeyStatus(nextRecoveryKeyStatus);
+      setCloudBackups(
+        nextCloud.connected ? await client.listCloudBackups() : [],
+      );
     } catch (cause) {
       notify.error(
         cause instanceof Error
@@ -553,7 +570,9 @@ export function App() {
   }
   async function saveRecoveryKey(recoveryKey: string) {
     await client.saveRecoveryKey(recoveryKey);
-    notify.success("Recovery key saved in this computer's secure credential store.");
+    notify.success(
+      "Recovery key saved in this computer's secure credential store.",
+    );
   }
   async function verifyBackup(fileName: string, recoveryKey?: string) {
     try {
@@ -561,7 +580,9 @@ export function App() {
       setBackups(await client.listBackups());
       notify.success(`Backup verified · ${info.appVersion}`);
     } catch (cause) {
-      notify.error(cause instanceof Error ? cause.message : "Unable to verify backup.");
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to verify backup.",
+      );
       throw cause;
     }
   }
@@ -571,7 +592,81 @@ export function App() {
       setBackups(await client.listBackups());
       notify.success("Backup deleted.");
     } catch (cause) {
-      notify.error(cause instanceof Error ? cause.message : "Unable to delete backup.");
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to delete backup.",
+      );
+      throw cause;
+    }
+  }
+  async function connectGoogleDrive() {
+    try {
+      const status = await client.connectGoogleDrive();
+      setCloudStatus(status);
+      notify.success(
+        "Google Drive connected. Backups remain encrypted before upload.",
+      );
+      try {
+        setCloudBackups(await client.listCloudBackups());
+      } catch (cause) {
+        notify.error(
+          `Google Drive connected, but backup history could not be loaded: ${
+            typeof cause === "string"
+              ? cause
+              : cause instanceof Error
+                ? cause.message
+                : "Drive listing failed"
+          }`,
+        );
+      }
+    } catch (cause) {
+      notify.error(
+        typeof cause === "string"
+          ? cause
+          : cause instanceof Error
+            ? cause.message
+            : "Unable to connect Google Drive.",
+      );
+      throw cause;
+    }
+  }
+  async function disconnectGoogleDrive() {
+    await client.disconnectGoogleDrive();
+    setCloudStatus(await client.cloudStatus());
+    setCloudBackups([]);
+    notify.success(
+      "Google Drive disconnected. Existing Drive backups were not deleted.",
+    );
+  }
+  async function setCloudAutomatic(enabled: boolean) {
+    const status = await client.setCloudAutomatic(enabled);
+    setCloudStatus(status);
+  }
+  async function backupToDrive(): Promise<CloudBackupResult> {
+    const result = await client.backupToDrive();
+    setCloudStatus(await client.cloudStatus());
+    if (result.remote) setCloudBackups(await client.listCloudBackups());
+    notify[result.status === "uploaded" ? "success" : "error"](result.message);
+    return result;
+  }
+  async function deleteCloudBackup(remoteId: string) {
+    await client.deleteCloudBackup(remoteId);
+    setCloudBackups(await client.listCloudBackups());
+    notify.success("Cloud backup deleted.");
+  }
+  async function restoreCloudBackup(remoteId: string, recoveryKey?: string) {
+    try {
+      await client.restoreCloudBackup(remoteId, recoveryKey);
+      setOrder(null);
+      await refresh();
+      notify.success("Cloud backup restored. Local data has been reloaded.");
+    } catch (cause) {
+      notify.error(
+        typeof cause === "string"
+          ? cause
+          : cause instanceof Error
+            ? cause.message
+            : "Unable to restore cloud backup.",
+      );
       throw cause;
     }
   }
@@ -750,6 +845,15 @@ export function App() {
             onSaveRecoveryKey={saveRecoveryKey}
             onVerifyBackup={verifyBackup}
             onDeleteBackup={deleteBackup}
+            cloudStatus={cloudStatus}
+            cloudBackups={cloudBackups}
+            recoveryKeyConfigured={recoveryKeyStatus?.configured ?? false}
+            onConnectGoogleDrive={connectGoogleDrive}
+            onDisconnectGoogleDrive={disconnectGoogleDrive}
+            onSetCloudAutomatic={setCloudAutomatic}
+            onBackupToDrive={backupToDrive}
+            onDeleteCloudBackup={deleteCloudBackup}
+            onRestoreCloudBackup={restoreCloudBackup}
             staff={staff}
             onCreateStaff={createStaff}
             onUpdateStaff={updateStaff}

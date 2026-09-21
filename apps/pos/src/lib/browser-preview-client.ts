@@ -8,6 +8,9 @@ import type {
   PosBootstrap,
   BackupInfo,
   DatabaseHealth,
+  CloudBackupResult,
+  CloudStatus,
+  RemoteBackup,
   AuthBootstrap,
   AuthUser,
   SessionUser,
@@ -1100,19 +1103,27 @@ export function createBrowserPreviewClient(): PosClient {
       return [];
     },
     async verifyBackup(): Promise<BackupInfo> {
-      throw new Error("Backup verification is available in the native desktop app only.");
+      throw new Error(
+        "Backup verification is available in the native desktop app only.",
+      );
     },
     async deleteBackup(): Promise<void> {
-      throw new Error("Backup deletion is available in the native desktop app only.");
+      throw new Error(
+        "Backup deletion is available in the native desktop app only.",
+      );
     },
     async recoveryKeyStatus() {
       return { configured: false };
     },
     async createRecoveryKey() {
-      throw new Error("Recovery credentials are available in the native desktop app only.");
+      throw new Error(
+        "Recovery credentials are available in the native desktop app only.",
+      );
     },
     async saveRecoveryKey() {
-      throw new Error("Recovery credentials are available in the native desktop app only.");
+      throw new Error(
+        "Recovery credentials are available in the native desktop app only.",
+      );
     },
     async backupNow(): Promise<BackupInfo> {
       requirePermission("backup");
@@ -1134,6 +1145,51 @@ export function createBrowserPreviewClient(): PosClient {
     async restoreBackup(): Promise<BackupInfo> {
       requirePermission("backup");
       throw new Error("Restore is available in the native desktop app only.");
+    },
+    async cloudStatus(): Promise<CloudStatus> {
+      return {
+        connected: false,
+        accountEmail: null,
+        automaticEnabled: false,
+        status: "native_only",
+        lastSuccess: null,
+        pending: 0,
+      };
+    },
+    async connectGoogleDrive(): Promise<CloudStatus> {
+      throw new Error(
+        "Google Drive connection is available in the native desktop app only.",
+      );
+    },
+    async disconnectGoogleDrive(): Promise<void> {
+      throw new Error(
+        "Google Drive connection is available in the native desktop app only.",
+      );
+    },
+    async setCloudAutomatic(): Promise<CloudStatus> {
+      throw new Error(
+        "Google Drive backup is available in the native desktop app only.",
+      );
+    },
+    async listCloudBackups(): Promise<RemoteBackup[]> {
+      throw new Error(
+        "Google Drive backup is available in the native desktop app only.",
+      );
+    },
+    async backupToDrive(): Promise<CloudBackupResult> {
+      throw new Error(
+        "Google Drive backup is available in the native desktop app only.",
+      );
+    },
+    async deleteCloudBackup(): Promise<void> {
+      throw new Error(
+        "Google Drive backup is available in the native desktop app only.",
+      );
+    },
+    async restoreCloudBackup(): Promise<BackupInfo> {
+      throw new Error(
+        "Google Drive restore is available in the native desktop app only.",
+      );
     },
     async listInventory() {
       return readState().inventory.map(refreshInventory);
