@@ -84,6 +84,30 @@ describe("kitchen ticket printing", () => {
     expect(output.split("\n").every((line) => line.length <= 32)).toBe(true);
   });
 
+  it("prints the selected price-option snapshot on a receipt", () => {
+    const output = formatReceipt({
+      businessName: "ATE05",
+      receiptNumber: 2,
+      orderNumber: 2,
+      issuedAt: "2026-09-09T20:15:00.000Z",
+      tableName: null,
+      items: [
+        {
+          name: "Tilapia",
+          priceOptionName: "Large",
+          quantity: 1,
+          unitPriceMinor: 11000,
+          lineTotalMinor: 11000,
+        },
+      ],
+      subtotalMinor: 11000,
+      totalMinor: 11000,
+      payments: [{ method: "cash", amountMinor: 11000 }],
+    });
+    expect(output).toContain("1 x Tilapia — Large");
+    expect(output).toContain("GHS 110.00");
+  });
+
   it("formats initial, addition, and cancellation tickets without prices", () => {
     expect(formatKitchenTicket(ticket)).toContain("INITIAL");
     expect(formatKitchenTicket({ ...ticket, type: "addition" })).toContain(

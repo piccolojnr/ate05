@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 pub const BACKUP_FORMAT_VERSION: u32 = 2;
 const LEGACY_FORMAT_VERSION: u32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 5;
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 const AUTOMATIC_RETENTION: usize = 14;
 const MAGIC: &[u8; 8] = b"ATE05BK\0";
 const SERVICE: &str = "com.ate05.pos";
@@ -29,11 +29,12 @@ const CHUNK_SIZE: usize = 1024 * 1024;
 const KDF_MEMORY_KIB: u32 = 19_456;
 const KDF_ITERATIONS: u32 = 2;
 const KDF_PARALLELISM: u32 = 1;
-const EXPECTED_TABLES: [&str; 16] = [
+const EXPECTED_TABLES: [&str; 17] = [
     "businesses",
     "users",
     "menu_categories",
     "menu_items",
+    "menu_item_price_options",
     "restaurant_tables",
     "orders",
     "order_items",
@@ -344,7 +345,9 @@ async fn check_database(path: &Path) -> Result<i64, BackupError> {
             .fetch_optional(&pool)
             .await
             .map_err(|e| BackupError::InvalidDatabase(e.to_string()))?;
-            if exists.is_none() && !(table == "print_attempts" && version < CURRENT_SCHEMA_VERSION)
+            if exists.is_none()
+                && !((table == "print_attempts" && version < 4)
+                    || (table == "menu_item_price_options" && version < 6))
             {
                 return Err(BackupError::InvalidDatabase(format!(
                     "required table {table} is missing"
@@ -1089,6 +1092,9 @@ mod tests {
         database::migrate_path(&db).await.unwrap();
         let pool = database::connect(&db).await.unwrap();
         sqlx::query("INSERT INTO businesses (id, name, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").bind("business-1").bind("Known POS").bind(true).bind("2026-09-11T00:00:00Z").bind("2026-09-11T00:00:00Z").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO menu_categories (id, business_id, name, sort_order, active, created_at, updated_at) VALUES (?, ?, ?, 0, 1, ?, ?)").bind("category-1").bind("business-1").bind("Mains").bind("2026-09-11T00:00:00Z").bind("2026-09-11T00:00:00Z").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO menu_items (id, business_id, category_id, name, selling_price_minor, pricing_mode, available, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'options', 1, 1, ?, ?)").bind("item-1").bind("business-1").bind("category-1").bind("Tilapia").bind(0_i64).bind("2026-09-11T00:00:00Z").bind("2026-09-11T00:00:00Z").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO menu_item_price_options (id, business_id, menu_item_id, name, price_minor, sort_order, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)").bind("option-1").bind("business-1").bind("item-1").bind("Large").bind(11000_i64).bind("2026-09-11T00:00:00Z").bind("2026-09-11T00:00:00Z").execute(&pool).await.unwrap();
         (db, pool)
     }
     #[test]
@@ -1099,6 +1105,7 @@ mod tests {
             let dir = root.join("backups");
             let key = "owner-recovery-key-for-test-1234567890";
             let info = create_with_key(&pool, &dir, "manual", key).await.unwrap();
+            assert_eq!(info.schema_version, CURRENT_SCHEMA_VERSION);
             let path = dir.join(&info.file_name);
             assert!(path.is_file());
             assert!(!fs::read(&path)
@@ -1204,13 +1211,22 @@ mod tests {
             ));
             let key = "owner-recovery-key-for-test-1234567890";
             let info = create_with_key(&pool, &dir, "manual", key).await.unwrap();
-            sqlx::query("DELETE FROM businesses")
-                .execute(&pool)
-                .await
-                .unwrap();
+            sqlx::query(
+                "UPDATE businesses SET name = 'Changed after backup' WHERE id = 'business-1'",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
             let (restored, _) = restore(pool, &db, &dir, &info.file_name, Some(key))
                 .await
                 .unwrap();
+            let restored_option: (String, i64) = sqlx::query_as(
+                "SELECT name, price_minor FROM menu_item_price_options WHERE id = 'option-1'",
+            )
+            .fetch_one(&restored)
+            .await
+            .unwrap();
+            assert_eq!(restored_option, ("Large".into(), 11000));
             let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM businesses")
                 .fetch_one(&restored)
                 .await

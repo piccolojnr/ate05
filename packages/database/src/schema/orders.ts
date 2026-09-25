@@ -8,7 +8,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { businesses } from "./businesses";
-import { menuItems } from "./menu";
+import { menuItemPriceOptions, menuItems } from "./menu";
 import { restaurantTables } from "./seating";
 import { users } from "./users";
 
@@ -78,7 +78,12 @@ export const orderItems = sqliteTable(
     menuItemId: text("menu_item_id").references(() => menuItems.id, {
       onDelete: "set null",
     }),
+    priceOptionId: text("price_option_id").references(
+      () => menuItemPriceOptions.id,
+      { onDelete: "set null" },
+    ),
     itemNameSnapshot: text("item_name_snapshot").notNull(),
+    priceOptionNameSnapshot: text("price_option_name_snapshot"),
     unitPriceMinorSnapshot: integer("unit_price_minor_snapshot").notNull(),
     quantity: integer("quantity").notNull(),
     lineTotalMinor: integer("line_total_minor").notNull(),
@@ -89,6 +94,7 @@ export const orderItems = sqliteTable(
   (table) => [
     index("order_items_order_id_idx").on(table.orderId),
     index("order_items_business_id_idx").on(table.businessId),
+    index("order_items_price_option_id_idx").on(table.priceOptionId),
     check("order_items_quantity_positive", sql`${table.quantity} > 0`),
     check(
       "order_items_money_nonnegative",

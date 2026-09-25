@@ -1,4 +1,5 @@
 import type { PaperWidth } from "@ate05/printing";
+import type { MenuPriceOptionInput, PricingMode } from "@ate05/domain";
 import type {
   AuthBootstrap,
   AuthUser,
@@ -54,6 +55,8 @@ export interface CatalogItemInput {
   description?: string | null;
   categoryId: string;
   sellingPriceMinor: number;
+  pricingMode: PricingMode;
+  priceOptions: MenuPriceOptionInput[];
   available: boolean;
   active: boolean;
 }
@@ -123,6 +126,7 @@ export interface OrdersClient {
   addMenuItem(input: {
     orderId?: string;
     menuItemId: string;
+    priceOptionId?: string;
     orderType: OrderType;
     tableId?: string | null;
   }): Promise<PosOrder>;

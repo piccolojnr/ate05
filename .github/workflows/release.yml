@@ -78,7 +78,7 @@ jobs:
             Start by setting the owner PIN, choose an editable starter menu if useful, add initial tables, and configure printers later in Settings. Keep an exported backup on separate storage.
 
             macOS and Windows artifacts require platform security approval until production signing credentials are configured.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           generateReleaseNotes: true
           uploadWorkflowArtifacts: true

@@ -46,18 +46,22 @@ function MenuCategoryBar({
 function MenuItemTile({
   item,
   categoryName,
-  onAdd,
+  onSelect,
 }: {
   item: MenuItem;
   categoryName?: string;
-  onAdd: (id: string) => void;
+  onSelect: (item: MenuItem) => void;
 }) {
   return (
     <button
       className="group flex min-h-[132px] flex-col rounded-md border bg-card p-3 text-left shadow-none transition-colors hover:border-primary/50 hover:bg-primary/[0.03] active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       type="button"
-      onClick={() => onAdd(item.id)}
-      aria-label={`Add ${item.name}`}
+      onClick={() => onSelect(item)}
+      aria-label={
+        item.pricingMode === "options"
+          ? `Choose price option for ${item.name}`
+          : `Add ${item.name}`
+      }
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -67,7 +71,9 @@ function MenuItemTile({
           </p>
         </div>
         <p className="shrink-0 tabular-nums text-sm font-black text-primary">
-          {formatGhs(item.sellingPriceMinor).replace("GHS ", "")}
+          {item.pricingMode === "fixed"
+            ? formatGhs(item.sellingPriceMinor).replace("GHS ", "")
+            : `${item.priceOptions.length} options`}
         </p>
       </div>
       {item.description ? (
@@ -76,9 +82,91 @@ function MenuItemTile({
         </p>
       ) : null}
       <span className="mt-auto flex items-center gap-1 pt-3 text-xs font-bold text-primary">
-        <Icon name="plus" width="15" height="15" /> Add item
+        <Icon name="plus" width="15" height="15" />
+        {item.pricingMode === "fixed" ? "Add item" : "Choose option"}
       </span>
     </button>
+  );
+}
+
+function PriceOptionSelector({
+  item,
+  onCancel,
+  onSelect,
+}: {
+  item: MenuItem;
+  onCancel: () => void;
+  onSelect: (optionId: string) => void;
+}) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onCancel();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-foreground/30 p-4"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <Card
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="price-option-title"
+        className="w-full max-w-md overflow-hidden p-0 shadow-floating"
+      >
+        <div className="flex items-start justify-between gap-4 border-b p-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">
+              Choose an option
+            </p>
+            <h2 id="price-option-title" className="mt-1 text-xl font-black">
+              {item.name}
+            </h2>
+          </div>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label="Cancel price option selection"
+            onClick={onCancel}
+          >
+            ×
+          </Button>
+        </div>
+        <div className="grid gap-2 p-4">
+          {item.priceOptions
+            .filter((option) => option.active)
+            .sort((left, right) => left.sortOrder - right.sortOrder)
+            .map((option, index) => (
+              <button
+                key={option.id}
+                type="button"
+                autoFocus={index === 0}
+                onClick={() => onSelect(option.id)}
+                className="flex min-h-14 items-center justify-between gap-4 rounded-md border bg-card px-4 py-3 text-left font-bold hover:border-primary hover:bg-primary/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span>{option.name}</span>
+                <span className="shrink-0 tabular-nums text-primary">
+                  {formatGhs(option.priceMinor)}
+                </span>
+              </button>
+            ))}
+        </div>
+        <div className="border-t p-3 text-right">
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -97,7 +185,7 @@ export function MenuCatalog({
 }: {
   category: string;
   onCategoryChange: (category: string) => void;
-  onAdd: (id: string) => void;
+  onAdd: (id: string, priceOptionId?: string) => void;
   categories: MenuCategory[];
   items: MenuItem[];
   orderType: OrderType;
@@ -108,6 +196,8 @@ export function MenuCatalog({
   orderNumber?: number;
 }) {
   const [query, setQuery] = useState("");
+  const [selectingOptionsFor, setSelectingOptionsFor] =
+    useState<MenuItem | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
@@ -126,6 +216,7 @@ export function MenuCatalog({
         query &&
         (!typing || target === searchRef.current)
       ) {
+        if (document.querySelector('[role="dialog"]')) return;
         event.preventDefault();
         setQuery("");
         searchRef.current?.focus();
@@ -297,7 +388,10 @@ export function MenuCatalog({
                     categories.find((entry) => entry.id === item.categoryId)
                       ?.name
                   }
-                  onAdd={onAdd}
+                  onSelect={(selected) => {
+                    if (selected.pricingMode === "fixed") onAdd(selected.id);
+                    else setSelectingOptionsFor(selected);
+                  }}
                 />
               ))}
             </div>
@@ -313,6 +407,17 @@ export function MenuCatalog({
           )}
         </div>
       </Card>
+      {selectingOptionsFor ? (
+        <PriceOptionSelector
+          item={selectingOptionsFor}
+          onCancel={() => setSelectingOptionsFor(null)}
+          onSelect={(priceOptionId) => {
+            const itemId = selectingOptionsFor.id;
+            setSelectingOptionsFor(null);
+            onAdd(itemId, priceOptionId);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

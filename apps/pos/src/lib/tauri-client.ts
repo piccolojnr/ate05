@@ -7,7 +7,11 @@ import {
   calculateOrderTotals,
   money,
   multiplyMoney,
+  validateMenuPricing,
   type KitchenSyncLine,
+  type MenuPriceOption,
+  type MenuPriceOptionInput,
+  type PricingMode,
 } from "@ate05/domain";
 import type {
   KitchenTicket,
@@ -142,7 +146,10 @@ function mapStockMovement(row: Row): StockMovement {
     createdAt: asString(row.createdAt),
   };
 }
-function mapMenuManagement(row: Row): MenuManagementItem {
+function mapMenuManagement(
+  row: Row,
+  priceOptions: MenuPriceOption[],
+): MenuManagementItem {
   return {
     id: asString(row.id),
     categoryId: asString(row.categoryId),
@@ -150,6 +157,8 @@ function mapMenuManagement(row: Row): MenuManagementItem {
     name: asString(row.name),
     description: asNullableString(row.description),
     sellingPriceMinor: asNumber(row.sellingPriceMinor),
+    pricingMode: asString(row.pricingMode) as PricingMode,
+    priceOptions,
     available: Boolean(asNumber(row.available)),
     active: Boolean(asNumber(row.active)),
     updatedAt: asString(row.updatedAt),
@@ -158,7 +167,7 @@ function mapMenuManagement(row: Row): MenuManagementItem {
 async function listMenuManagementRows(
   db: SqlDatabase,
 ): Promise<MenuManagementData> {
-  const [categories, items] = await Promise.all([
+  const [categories, items, options] = await Promise.all([
     select<Row>(
       db,
       "SELECT id, name, sort_order AS sortOrder, active FROM menu_categories WHERE business_id = $1 ORDER BY active DESC, sort_order, name",
@@ -166,7 +175,12 @@ async function listMenuManagementRows(
     ),
     select<Row>(
       db,
-      "SELECT i.id, i.category_id AS categoryId, c.name AS categoryName, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.available, i.active, i.updated_at AS updatedAt FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = $1 ORDER BY i.active DESC, i.name",
+      "SELECT i.id, i.category_id AS categoryId, c.name AS categoryName, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.pricing_mode AS pricingMode, i.available, i.active, i.updated_at AS updatedAt FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = $1 ORDER BY i.active DESC, i.name",
+      [businessId],
+    ),
+    select<Row>(
+      db,
+      "SELECT id, menu_item_id AS menuItemId, name, price_minor AS priceMinor, sort_order AS sortOrder, active FROM menu_item_price_options WHERE business_id = $1 AND active = 1 ORDER BY menu_item_id, sort_order, name",
       [businessId],
     ),
   ]);
@@ -177,8 +191,75 @@ async function listMenuManagementRows(
       sortOrder: asNumber(row.sortOrder),
       active: Boolean(asNumber(row.active)),
     })),
-    items: items.map(mapMenuManagement),
+    items: items.map((row) =>
+      mapMenuManagement(
+        row,
+        options
+          .filter((option) => option.menuItemId === row.id)
+          .map((option) => ({
+            id: asString(option.id),
+            name: asString(option.name),
+            priceMinor: asNumber(option.priceMinor),
+            sortOrder: asNumber(option.sortOrder),
+            active: Boolean(asNumber(option.active)),
+          })),
+      ),
+    ),
   };
+}
+
+async function savePriceOptions(
+  db: SqlDatabase,
+  menuItemId: string,
+  options: MenuPriceOptionInput[],
+  updatedAt: string,
+): Promise<void> {
+  await execute(
+    db,
+    "UPDATE menu_item_price_options SET active = 0, updated_at = $1 WHERE menu_item_id = $2 AND business_id = $3",
+    [updatedAt, menuItemId, businessId],
+  );
+  for (const [sortOrder, option] of options.entries()) {
+    if (option.id) {
+      const [existing] = await select<Row>(
+        db,
+        "SELECT id FROM menu_item_price_options WHERE id = $1 AND menu_item_id = $2 AND business_id = $3",
+        [option.id, menuItemId, businessId],
+      );
+      if (!existing)
+        throw new PosClientError(
+          "validation",
+          "A price option no longer belongs to this menu item.",
+        );
+      await execute(
+        db,
+        "UPDATE menu_item_price_options SET name = $1, price_minor = $2, sort_order = $3, active = 1, updated_at = $4 WHERE id = $5 AND menu_item_id = $6 AND business_id = $7",
+        [
+          option.name.trim(),
+          option.priceMinor,
+          sortOrder,
+          updatedAt,
+          option.id,
+          menuItemId,
+          businessId,
+        ],
+      );
+    } else {
+      await execute(
+        db,
+        "INSERT INTO menu_item_price_options (id, business_id, menu_item_id, name, price_minor, sort_order, active, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)",
+        [
+          crypto.randomUUID(),
+          businessId,
+          menuItemId,
+          option.name.trim(),
+          option.priceMinor,
+          sortOrder,
+          updatedAt,
+        ],
+      );
+    }
+  }
 }
 async function database(): Promise<SqlDatabase> {
   // Rust preloads/migrates and configures the pool. load() would replace it.
@@ -740,7 +821,9 @@ async function attemptReceiptPrint(
         issuedAt: receipt.issuedAt,
         tableName: order.tableName,
         items: receipt.items.map((item) => ({
-          name: item.name,
+          name: item.priceOptionName
+            ? `${item.name} — ${item.priceOptionName}`
+            : item.name,
           quantity: item.quantity,
           lineTotalMinor: item.lineTotalMinor,
         })),
@@ -791,7 +874,7 @@ async function getKitchenSyncLines(
 ): Promise<KitchenSyncLine[]> {
   const current = await select<Row>(
     db,
-    "SELECT id AS orderItemId, item_name_snapshot AS itemName, quantity, notes FROM order_items WHERE order_id = $1",
+    "SELECT id AS orderItemId, CASE WHEN price_option_name_snapshot IS NULL THEN item_name_snapshot ELSE item_name_snapshot || ' — ' || price_option_name_snapshot END AS itemName, quantity, notes FROM order_items WHERE order_id = $1",
     [orderId],
   );
   const sent = await select<Row>(
@@ -852,7 +935,7 @@ async function getOrder(db: SqlDatabase, orderId: string): Promise<PosOrder> {
   if (!order) throw new PosClientError("not_found", "Order not found.");
   const rows = await select<Row>(
     db,
-    "SELECT id, menu_item_id AS menuItemId, item_name_snapshot AS name, unit_price_minor_snapshot AS unitPriceMinor, quantity, line_total_minor AS lineTotalMinor, notes FROM order_items WHERE order_id = $1 ORDER BY created_at, id",
+    "SELECT id, menu_item_id AS menuItemId, price_option_id AS priceOptionId, item_name_snapshot AS name, price_option_name_snapshot AS priceOptionName, unit_price_minor_snapshot AS unitPriceMinor, quantity, line_total_minor AS lineTotalMinor, notes FROM order_items WHERE order_id = $1 ORDER BY created_at, id",
     [orderId],
   );
   const orderResult = mapOrder(
@@ -861,6 +944,8 @@ async function getOrder(db: SqlDatabase, orderId: string): Promise<PosOrder> {
       id: asString(row.id),
       menuItemId: asNullableString(row.menuItemId),
       name: asString(row.name),
+      priceOptionId: asNullableString(row.priceOptionId),
+      priceOptionName: asNullableString(row.priceOptionName),
       unitPriceMinor: asNumber(row.unitPriceMinor),
       quantity: asNumber(row.quantity),
       lineTotalMinor: asNumber(row.lineTotalMinor),
@@ -1117,11 +1202,18 @@ export function createTauriClient(): PosClient {
         "SELECT id, name, sort_order AS sortOrder FROM menu_categories WHERE business_id = $1 AND active = 1 ORDER BY sort_order, name",
         [businessId],
       );
-      const items = await select<Row>(
-        db,
-        "SELECT i.id, i.category_id AS categoryId, i.name, i.description, i.selling_price_minor AS sellingPriceMinor FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = $1 AND i.active = 1 AND i.available = 1 AND c.active = 1 ORDER BY i.name",
-        [businessId],
-      );
+      const [items, options] = await Promise.all([
+        select<Row>(
+          db,
+          "SELECT i.id, i.category_id AS categoryId, i.name, i.description, i.selling_price_minor AS sellingPriceMinor, i.pricing_mode AS pricingMode FROM menu_items i JOIN menu_categories c ON c.id = i.category_id WHERE i.business_id = $1 AND i.active = 1 AND i.available = 1 AND c.active = 1 ORDER BY i.name",
+          [businessId],
+        ),
+        select<Row>(
+          db,
+          "SELECT id, menu_item_id AS menuItemId, name, price_minor AS priceMinor, sort_order AS sortOrder, active FROM menu_item_price_options WHERE business_id = $1 AND active = 1 ORDER BY menu_item_id, sort_order, name",
+          [businessId],
+        ),
+      ]);
       const tables = await select<Row>(
         db,
         "SELECT t.id, t.name, t.capacity, t.active, CASE WHEN EXISTS (SELECT 1 FROM orders o WHERE o.table_id = t.id AND o.business_id = t.business_id AND o.order_type = 'dine_in' AND o.status IN ('open', 'sent_to_kitchen', 'preparing', 'ready')) THEN 'occupied' ELSE t.status END AS status FROM restaurant_tables t WHERE t.business_id = $1 ORDER BY t.active DESC, t.name",
@@ -1147,6 +1239,16 @@ export function createTauriClient(): PosClient {
           name: asString(row.name),
           description: asNullableString(row.description),
           sellingPriceMinor: asNumber(row.sellingPriceMinor),
+          pricingMode: asString(row.pricingMode) as PricingMode,
+          priceOptions: options
+            .filter((option) => option.menuItemId === row.id)
+            .map((option) => ({
+              id: asString(option.id),
+              name: asString(option.name),
+              priceMinor: asNumber(option.priceMinor),
+              sortOrder: asNumber(option.sortOrder),
+              active: Boolean(asNumber(option.active)),
+            })),
         })),
         tables: tables.map((row) => ({
           id: asString(row.id),
@@ -1166,14 +1268,14 @@ export function createTauriClient(): PosClient {
       requirePermission("menu");
       if (!input.name.trim())
         throw new PosClientError("validation", "Menu item name is required.");
-      if (
-        !Number.isSafeInteger(input.sellingPriceMinor) ||
-        input.sellingPriceMinor < 0
-      )
+      try {
+        validateMenuPricing(input);
+      } catch (cause) {
         throw new PosClientError(
           "validation",
-          "Price must be a valid non-negative amount.",
+          cause instanceof Error ? cause.message : "Invalid pricing.",
         );
+      }
       const db = await database();
       const id = crypto.randomUUID();
       const now = timestamp();
@@ -1191,7 +1293,7 @@ export function createTauriClient(): PosClient {
           );
         await execute(
           db,
-          "INSERT INTO menu_items (id, business_id, category_id, name, description, selling_price_minor, available, active, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)",
+          "INSERT INTO menu_items (id, business_id, category_id, name, description, selling_price_minor, pricing_mode, available, active, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)",
           [
             id,
             businessId,
@@ -1199,11 +1301,13 @@ export function createTauriClient(): PosClient {
             input.name.trim(),
             input.description?.trim() || null,
             input.sellingPriceMinor,
+            input.pricingMode,
             input.available ? 1 : 0,
             input.active ? 1 : 0,
             now,
           ],
         );
+        await savePriceOptions(db, id, input.priceOptions, now);
         await execute(db, "COMMIT");
       } catch (cause) {
         await execute(db, "ROLLBACK").catch(() => undefined);
@@ -1219,14 +1323,14 @@ export function createTauriClient(): PosClient {
       requirePermission("menu");
       if (!input.name.trim())
         throw new PosClientError("validation", "Menu item name is required.");
-      if (
-        !Number.isSafeInteger(input.sellingPriceMinor) ||
-        input.sellingPriceMinor < 0
-      )
+      try {
+        validateMenuPricing(input);
+      } catch (cause) {
         throw new PosClientError(
           "validation",
-          "Price must be a valid non-negative amount.",
+          cause instanceof Error ? cause.message : "Invalid pricing.",
         );
+      }
       const db = await database();
       await execute(db, "BEGIN IMMEDIATE");
       try {
@@ -1242,12 +1346,13 @@ export function createTauriClient(): PosClient {
           );
         await execute(
           db,
-          "UPDATE menu_items SET name = $1, description = $2, category_id = $3, selling_price_minor = $4, available = $5, active = $6, updated_at = $7 WHERE id = $8 AND business_id = $9",
+          "UPDATE menu_items SET name = $1, description = $2, category_id = $3, selling_price_minor = $4, pricing_mode = $5, available = $6, active = $7, updated_at = $8 WHERE id = $9 AND business_id = $10",
           [
             input.name.trim(),
             input.description?.trim() || null,
             input.categoryId,
             input.sellingPriceMinor,
+            input.pricingMode,
             input.available ? 1 : 0,
             input.active ? 1 : 0,
             timestamp(),
@@ -1255,6 +1360,7 @@ export function createTauriClient(): PosClient {
             businessId,
           ],
         );
+        await savePriceOptions(db, input.id, input.priceOptions, timestamp());
         await execute(db, "COMMIT");
       } catch (cause) {
         await execute(db, "ROLLBACK").catch(() => undefined);
@@ -1510,18 +1616,44 @@ export function createTauriClient(): PosClient {
           "Takeaway orders cannot have a table.",
         );
       const db = await database();
-      const [menuItem] = await select<Row>(
-        db,
-        "SELECT id, name, selling_price_minor AS sellingPriceMinor FROM menu_items WHERE id = $1 AND business_id = $2 AND active = 1 AND available = 1",
-        [input.menuItemId, businessId],
-      );
-      if (!menuItem)
-        throw new PosClientError(
-          "unavailable",
-          "This menu item is unavailable.",
-        );
       await execute(db, "BEGIN IMMEDIATE");
       try {
+        const [menuItem] = await select<Row>(
+          db,
+          "SELECT id, name, selling_price_minor AS sellingPriceMinor, pricing_mode AS pricingMode FROM menu_items WHERE id = $1 AND business_id = $2 AND active = 1 AND available = 1",
+          [input.menuItemId, businessId],
+        );
+        if (!menuItem)
+          throw new PosClientError(
+            "unavailable",
+            "This menu item is unavailable.",
+          );
+        let selectedOption: Row | undefined;
+        if (asString(menuItem.pricingMode) === "options") {
+          if (!input.priceOptionId)
+            throw new PosClientError(
+              "validation",
+              "Choose a price option before adding this item.",
+            );
+          [selectedOption] = await select<Row>(
+            db,
+            "SELECT id, name, price_minor AS priceMinor FROM menu_item_price_options WHERE id = $1 AND menu_item_id = $2 AND business_id = $3 AND active = 1",
+            [input.priceOptionId, input.menuItemId, businessId],
+          );
+          if (!selectedOption)
+            throw new PosClientError(
+              "unavailable",
+              "This price option is unavailable.",
+            );
+        } else if (input.priceOptionId) {
+          throw new PosClientError(
+            "validation",
+            "Fixed-price items do not use price options.",
+          );
+        }
+        const unitPriceMinor = selectedOption
+          ? asNumber(selectedOption.priceMinor)
+          : asNumber(menuItem.sellingPriceMinor);
         let orderId = input.orderId;
         if (!orderId) {
           if (input.tableId) {
@@ -1586,8 +1718,18 @@ export function createTauriClient(): PosClient {
           );
         const [existing] = await select<Row>(
           db,
-          "SELECT id, quantity, unit_price_minor_snapshot AS unitPriceMinor FROM order_items WHERE order_id = $1 AND menu_item_id = $2 AND notes IS NULL",
-          [orderId, input.menuItemId],
+          selectedOption
+            ? "SELECT id, quantity, unit_price_minor_snapshot AS unitPriceMinor FROM order_items WHERE order_id = $1 AND menu_item_id = $2 AND price_option_id = $3 AND price_option_name_snapshot = $4 AND unit_price_minor_snapshot = $5 AND notes IS NULL"
+            : "SELECT id, quantity, unit_price_minor_snapshot AS unitPriceMinor FROM order_items WHERE order_id = $1 AND menu_item_id = $2 AND price_option_id IS NULL AND price_option_name_snapshot IS NULL AND notes IS NULL",
+          selectedOption
+            ? [
+                orderId,
+                input.menuItemId,
+                asString(selectedOption.id),
+                asString(selectedOption.name),
+                unitPriceMinor,
+              ]
+            : [orderId, input.menuItemId],
         );
         if (existing) {
           const quantity = asNumber(existing.quantity) + 1;
@@ -1605,14 +1747,16 @@ export function createTauriClient(): PosClient {
           const now = timestamp();
           await execute(
             db,
-            "INSERT INTO order_items (id, business_id, order_id, menu_item_id, item_name_snapshot, unit_price_minor_snapshot, quantity, line_total_minor, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 1, $6, $7, $7)",
+            "INSERT INTO order_items (id, business_id, order_id, menu_item_id, price_option_id, item_name_snapshot, price_option_name_snapshot, unit_price_minor_snapshot, quantity, line_total_minor, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $8, $9, $9)",
             [
               crypto.randomUUID(),
               businessId,
               orderId,
               asString(menuItem.id),
+              selectedOption ? asString(selectedOption.id) : null,
               asString(menuItem.name),
-              asNumber(menuItem.sellingPriceMinor),
+              selectedOption ? asString(selectedOption.name) : null,
+              unitPriceMinor,
               now,
             ],
           );
@@ -2039,7 +2183,7 @@ export function createTauriClient(): PosClient {
             );
             const itemRows = await select<Row>(
               db,
-              "SELECT id, menu_item_id AS menuItemId, item_name_snapshot AS name, unit_price_minor_snapshot AS unitPriceMinor, quantity, line_total_minor AS lineTotalMinor, notes FROM order_items WHERE order_id = $1 ORDER BY created_at, id",
+              "SELECT id, menu_item_id AS menuItemId, price_option_id AS priceOptionId, item_name_snapshot AS name, price_option_name_snapshot AS priceOptionName, unit_price_minor_snapshot AS unitPriceMinor, quantity, line_total_minor AS lineTotalMinor, notes FROM order_items WHERE order_id = $1 ORDER BY created_at, id",
               [input.orderId],
             );
             const paymentRows = await select<Row>(
@@ -2052,6 +2196,8 @@ export function createTauriClient(): PosClient {
                 id: asString(row.id),
                 menuItemId: asNullableString(row.menuItemId),
                 name: asString(row.name),
+                priceOptionId: asNullableString(row.priceOptionId),
+                priceOptionName: asNullableString(row.priceOptionName),
                 unitPriceMinor: asNumber(row.unitPriceMinor),
                 quantity: asNumber(row.quantity),
                 lineTotalMinor: asNumber(row.lineTotalMinor),

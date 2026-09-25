@@ -1,10 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { money, multiplyMoney } from "./money";
 import { calculateOrderTotals } from "./orders";
+import { normalizePriceOptionName, validateMenuPricing } from "./menu";
 
 describe("domain package", () => {
   it("loads without infrastructure dependencies", () => {
     expect(true).toBe(true);
+  });
+});
+
+describe("menu pricing", () => {
+  it("normalizes option names and rejects invalid option configurations", () => {
+    expect(normalizePriceOptionName("  FAMILY   Size ")).toBe("family size");
+    expect(() =>
+      validateMenuPricing({
+        pricingMode: "options",
+        sellingPriceMinor: 0,
+        priceOptions: [],
+      }),
+    ).toThrow("at least one");
+    expect(() =>
+      validateMenuPricing({
+        pricingMode: "options",
+        sellingPriceMinor: 0,
+        priceOptions: [
+          { name: "Large", priceMinor: 11000 },
+          { name: " large ", priceMinor: 12500 },
+        ],
+      }),
+    ).toThrow("unique");
+    expect(() =>
+      validateMenuPricing({
+        pricingMode: "options",
+        sellingPriceMinor: 0,
+        priceOptions: [{ name: "Large", priceMinor: -1 }],
+      }),
+    ).toThrow("Option price");
   });
 });
 

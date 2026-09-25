@@ -1,5 +1,6 @@
 export type OrderType = "dine_in" | "takeaway";
 import type { PrinterConfig } from "@ate05/printing";
+import type { MenuPriceOption, PricingMode } from "@ate05/domain";
 import type {
   BootstrapClient,
   CatalogClient,
@@ -26,6 +27,8 @@ export interface MenuItem {
   name: string;
   description: string | null;
   sellingPriceMinor: number;
+  pricingMode: PricingMode;
+  priceOptions: MenuPriceOption[];
 }
 
 export interface MenuManagementItem extends MenuItem {
@@ -76,6 +79,8 @@ export interface OrderItem {
   id: string;
   menuItemId: string | null;
   name: string;
+  priceOptionId: string | null;
+  priceOptionName: string | null;
   unitPriceMinor: number;
   quantity: number;
   lineTotalMinor: number;
