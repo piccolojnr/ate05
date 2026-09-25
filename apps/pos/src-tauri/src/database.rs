@@ -116,6 +116,7 @@ pub async fn migrate_path(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Connection;
 
     #[derive(Debug)]
     struct PreviousMigrations(Vec<Migration>);

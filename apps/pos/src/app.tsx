@@ -18,6 +18,9 @@ import type {
   DatabaseHealth,
   SessionUser,
   AuthUser,
+  CloudBackupResult,
+  CloudStatus,
+  RemoteBackup,
 } from "./lib/pos-client";
 import { formatGhs } from "./lib/pos-client";
 import { TablesScreen } from "./screens/tables/tables-screen";
@@ -48,6 +51,11 @@ export function App() {
   const [databaseHealth, setDatabaseHealth] = useState<DatabaseHealth | null>(
     null,
   );
+  const [cloudStatus, setCloudStatus] = useState<CloudStatus | null>(null);
+  const [cloudBackups, setCloudBackups] = useState<RemoteBackup[]>([]);
+  const [cloudBackupsError, setCloudBackupsError] = useState<string | null>(
+    null,
+  );
   const [staff, setStaff] = useState<AuthUser[]>([]);
   const [menuManagement, setMenuManagement] =
     useState<MenuManagementData | null>(null);
@@ -74,6 +82,25 @@ export function App() {
     [order],
   );
 
+  const refreshCloudData = useCallback(async (connected: boolean) => {
+    if (!connected) {
+      setCloudBackups([]);
+      setCloudBackupsError(null);
+      return;
+    }
+    const [backupsResult] = await Promise.allSettled([
+      client.listCloudBackups(),
+    ]);
+    setCloudBackups(
+      backupsResult.status === "fulfilled" ? backupsResult.value : [],
+    );
+    setCloudBackupsError(
+      backupsResult.status === "rejected"
+        ? String(backupsResult.reason ?? "cloud_backup_list_unavailable")
+        : null,
+    );
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -84,6 +111,7 @@ export function App() {
         nextBackups,
         nextHealth,
         nextStaff,
+        nextCloud,
       ] = await Promise.all([
         client.bootstrap(),
         client.listPrinters(),
@@ -93,6 +121,7 @@ export function App() {
         session?.permissions.includes("staff")
           ? client.listStaff()
           : Promise.resolve([]),
+        client.cloudStatus(),
       ]);
       setBootstrap(nextBootstrap);
       setPrinters(nextPrinters);
@@ -100,6 +129,8 @@ export function App() {
       setBackups(nextBackups);
       setDatabaseHealth(nextHealth);
       setStaff(nextStaff);
+      setCloudStatus(nextCloud);
+      await refreshCloudData(nextCloud.connected);
     } catch (cause) {
       notify.error(
         cause instanceof Error
@@ -109,7 +140,7 @@ export function App() {
     } finally {
       setLoading(false);
     }
-  }, [session]);
+  }, [refreshCloudData, session]);
   async function refreshMenu() {
     setMenuManagement(await client.listMenuManagement());
     const nextBootstrap = await client.bootstrap();
@@ -553,6 +584,115 @@ export function App() {
       throw cause;
     }
   }
+  async function verifyBackup(fileName: string) {
+    try {
+      const info = await client.verifyBackup(fileName);
+      setBackups(await client.listBackups());
+      notify.success(`Backup verified · ${info.appVersion}`);
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to verify backup.",
+      );
+      throw cause;
+    }
+  }
+  async function deleteBackup(fileName: string) {
+    try {
+      await client.deleteBackup(fileName);
+      setBackups(await client.listBackups());
+      notify.success("Backup deleted.");
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error ? cause.message : "Unable to delete backup.",
+      );
+      throw cause;
+    }
+  }
+  async function connectGoogleDrive() {
+    try {
+      const status = await client.connectGoogleDrive();
+      setCloudStatus(status);
+      notify.success(
+        "Google Drive connected. Backups are available to this Google account.",
+      );
+      try {
+        await refreshCloudData(status.connected);
+      } catch (cause) {
+        notify.error(
+          `Google Drive connected, but backup history could not be loaded: ${
+            typeof cause === "string"
+              ? cause
+              : cause instanceof Error
+                ? cause.message
+                : "Drive listing failed"
+          }`,
+        );
+      }
+    } catch (cause) {
+      notify.error(
+        typeof cause === "string"
+          ? cause
+          : cause instanceof Error
+            ? cause.message
+            : "Unable to connect Google Drive.",
+      );
+      throw cause;
+    }
+  }
+  async function disconnectGoogleDrive() {
+    await client.disconnectGoogleDrive();
+    setCloudStatus(await client.cloudStatus());
+    await refreshCloudData(false);
+    notify.success(
+      "Google Drive disconnected. Existing Drive backups were not deleted.",
+    );
+  }
+  async function refreshCloudConnection() {
+    try {
+      const status = await client.cloudStatus();
+      setCloudStatus(status);
+      await refreshCloudData(status.connected);
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to check the saved Google Drive connection.",
+      );
+    }
+  }
+  async function setCloudAutomatic(enabled: boolean) {
+    const status = await client.setCloudAutomatic(enabled);
+    setCloudStatus(status);
+  }
+  async function backupToDrive(): Promise<CloudBackupResult> {
+    const result = await client.backupToDrive();
+    setCloudStatus(await client.cloudStatus());
+    if (result.remote) setCloudBackups(await client.listCloudBackups());
+    notify[result.status === "uploaded" ? "success" : "error"](result.message);
+    return result;
+  }
+  async function deleteCloudBackup(remoteId: string) {
+    await client.deleteCloudBackup(remoteId);
+    setCloudBackups(await client.listCloudBackups());
+    notify.success("Cloud backup deleted.");
+  }
+  async function restoreCloudBackup(remoteId: string) {
+    try {
+      await client.restoreCloudBackup(remoteId);
+      setOrder(null);
+      await refresh();
+      notify.success("Cloud backup restored. Local data has been reloaded.");
+    } catch (cause) {
+      notify.error(
+        typeof cause === "string"
+          ? cause
+          : cause instanceof Error
+            ? cause.message
+            : "Unable to restore cloud backup.",
+      );
+      throw cause;
+    }
+  }
   async function retryPendingPrints() {
     const updatedOrders = await client.retryPendingKitchenPrints();
     const current = updatedOrders.find((entry) => entry.id === order?.id);
@@ -724,6 +864,18 @@ export function App() {
             onBackupNow={backupNow}
             onExportBackup={exportBackup}
             onRestoreBackup={restoreBackup}
+            onVerifyBackup={verifyBackup}
+            onDeleteBackup={deleteBackup}
+            cloudStatus={cloudStatus}
+            cloudBackups={cloudBackups}
+            cloudBackupsError={cloudBackupsError}
+            onRefreshCloudConnection={refreshCloudConnection}
+            onConnectGoogleDrive={connectGoogleDrive}
+            onDisconnectGoogleDrive={disconnectGoogleDrive}
+            onSetCloudAutomatic={setCloudAutomatic}
+            onBackupToDrive={backupToDrive}
+            onDeleteCloudBackup={deleteCloudBackup}
+            onRestoreCloudBackup={restoreCloudBackup}
             staff={staff}
             onCreateStaff={createStaff}
             onUpdateStaff={updateStaff}

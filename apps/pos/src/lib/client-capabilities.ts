@@ -5,6 +5,9 @@ import type {
   AuthUser,
   BackupInfo,
   DatabaseHealth,
+  CloudBackupResult,
+  CloudStatus,
+  RemoteBackup,
   InventoryItem,
   InventoryUnit,
   MenuCategory,
@@ -231,8 +234,18 @@ export interface SettingsClient {
 
 export interface RecoveryClient {
   listBackups(): Promise<BackupInfo[]>;
+  verifyBackup(fileName: string): Promise<BackupInfo>;
+  deleteBackup(fileName: string): Promise<void>;
   backupNow(): Promise<BackupInfo>;
   exportBackup(): Promise<string | null>;
   databaseHealth(): Promise<DatabaseHealth>;
   restoreBackup(fileName: string): Promise<BackupInfo>;
+  cloudStatus(): Promise<CloudStatus>;
+  connectGoogleDrive(): Promise<CloudStatus>;
+  disconnectGoogleDrive(): Promise<void>;
+  setCloudAutomatic(enabled: boolean): Promise<CloudStatus>;
+  listCloudBackups(): Promise<RemoteBackup[]>;
+  backupToDrive(): Promise<CloudBackupResult>;
+  deleteCloudBackup(remoteId: string): Promise<void>;
+  restoreCloudBackup(remoteId: string): Promise<BackupInfo>;
 }

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { LoaderCircle } from "lucide-react";
 import { Badge, Button, Card, Checkbox, Input, Select } from "@ate05/ui";
 import { PageHeader } from "../../components/page-header";
 import { StatusBadge } from "../../components/status-badge";
@@ -10,10 +11,41 @@ import type {
   AuthUser,
   PosClient,
   PosPrinterConfig,
+  CloudBackupResult,
+  CloudStatus,
+  RemoteBackup,
 } from "../../lib/pos-client";
 
 type PrinterRole = "kitchen" | "receipt";
 type TestState = "idle" | "printing" | "success" | "failed";
+type BackupAction =
+  | "local-create"
+  | "local-export"
+  | "local-verify"
+  | "local-restore"
+  | "local-delete"
+  | "drive-connect"
+  | "drive-disconnect"
+  | "drive-refresh"
+  | "drive-automatic"
+  | "drive-create"
+  | "drive-restore"
+  | "drive-delete";
+
+const backupActionLabels: Record<BackupAction, string> = {
+  "local-create": "Creating a backup on this computer…",
+  "local-export": "Preparing the backup file…",
+  "local-verify": "Checking the selected backup…",
+  "local-restore": "Restoring backup and reloading restaurant data…",
+  "local-delete": "Deleting the local backup…",
+  "drive-connect": "Connecting to Google Drive…",
+  "drive-disconnect": "Disconnecting Google Drive…",
+  "drive-refresh": "Checking Google Drive and loading backup history…",
+  "drive-automatic": "Updating automatic cloud backup…",
+  "drive-create": "Creating and uploading a cloud backup…",
+  "drive-restore": "Downloading and restoring cloud backup…",
+  "drive-delete": "Deleting the cloud backup…",
+};
 
 function StaffSection({
   staff,
@@ -546,6 +578,18 @@ export function SettingsScreen({
   onBackupNow,
   onExportBackup,
   onRestoreBackup,
+  onVerifyBackup,
+  onDeleteBackup,
+  cloudStatus,
+  cloudBackups,
+  cloudBackupsError,
+  onRefreshCloudConnection,
+  onConnectGoogleDrive,
+  onDisconnectGoogleDrive,
+  onSetCloudAutomatic,
+  onBackupToDrive,
+  onDeleteCloudBackup,
+  onRestoreCloudBackup,
   staff,
   onCreateStaff,
   onUpdateStaff,
@@ -562,6 +606,18 @@ export function SettingsScreen({
   onBackupNow: () => Promise<void>;
   onExportBackup: () => Promise<string | null>;
   onRestoreBackup: (fileName: string) => Promise<void>;
+  onVerifyBackup: (fileName: string) => Promise<void>;
+  onDeleteBackup: (fileName: string) => Promise<void>;
+  cloudStatus: CloudStatus | null;
+  cloudBackups: RemoteBackup[];
+  cloudBackupsError: string | null;
+  onRefreshCloudConnection: () => Promise<void>;
+  onConnectGoogleDrive: () => Promise<void>;
+  onDisconnectGoogleDrive: () => Promise<void>;
+  onSetCloudAutomatic: (enabled: boolean) => Promise<void>;
+  onBackupToDrive: () => Promise<CloudBackupResult>;
+  onDeleteCloudBackup: (remoteId: string) => Promise<void>;
+  onRestoreCloudBackup: (remoteId: string) => Promise<void>;
   staff: AuthUser[];
   onCreateStaff: (name: string, role: string, pin: string) => Promise<void>;
   onUpdateStaff: (input: {
@@ -572,9 +628,13 @@ export function SettingsScreen({
     pin?: string;
   }) => Promise<void>;
 }) {
-  const [backupState, setBackupState] = useState<"idle" | "working">("idle");
+  const [backupAction, setBackupAction] = useState<BackupAction | null>(null);
+  const [backupActionError, setBackupActionError] = useState<string | null>(
+    null,
+  );
   const [selectedBackup, setSelectedBackup] = useState("");
   const [confirmRestore, setConfirmRestore] = useState(false);
+  const [selectedCloudBackup, setSelectedCloudBackup] = useState("");
   const [activeTab, setActiveTab] = useState<"staff" | "printers" | "data">(
     "printers",
   );
@@ -582,6 +642,7 @@ export function SettingsScreen({
     PosPrinterConfig | null | undefined
   >(undefined);
   const native = isTauriRuntime(window);
+  const backupBusy = backupAction !== null;
   const latestAutomatic = backups.find((backup) => backup.kind === "automatic");
   const latestManual = backups.find((backup) => backup.kind === "manual");
   const formatBackupDate = (backup?: BackupInfo) =>
@@ -592,25 +653,42 @@ export function SettingsScreen({
         })
       : "Not created yet";
 
-  async function createBackup() {
-    setBackupState("working");
+  async function runBackupAction(
+    action: BackupAction,
+    operation: () => Promise<unknown>,
+  ) {
+    if (backupBusy) return;
+    setBackupAction(action);
+    setBackupActionError(null);
     try {
-      await onBackupNow();
+      await operation();
+    } catch (cause) {
+      setBackupActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action could not be completed.",
+      );
     } finally {
-      setBackupState("idle");
+      setBackupAction(null);
     }
+  }
+
+  async function createBackup() {
+    await runBackupAction("local-create", onBackupNow);
   }
 
   async function restore() {
     if (!selectedBackup) return;
-    setBackupState("working");
-    try {
+    await runBackupAction("local-restore", async () => {
       await onRestoreBackup(selectedBackup);
       setSelectedBackup("");
       setConfirmRestore(false);
-    } finally {
-      setBackupState("idle");
-    }
+    });
+  }
+
+  async function verifySelectedBackup() {
+    if (!selectedBackup) return;
+    await runBackupAction("local-verify", () => onVerifyBackup(selectedBackup));
   }
 
   return (
@@ -642,6 +720,28 @@ export function SettingsScreen({
           </button>
         ))}
       </nav>
+      {activeTab === "data" && backupAction ? (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+          className="flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm font-semibold"
+        >
+          <LoaderCircle
+            aria-hidden="true"
+            className="size-4 shrink-0 animate-spin text-primary"
+          />
+          <span>{backupActionLabels[backupAction]}</span>
+        </div>
+      ) : null}
+      {activeTab === "data" && backupActionError ? (
+        <div
+          role="alert"
+          className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+        >
+          {backupActionError}
+        </div>
+      ) : null}
       {activeTab === "printers" ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/20 p-4">
@@ -792,17 +892,39 @@ export function SettingsScreen({
             ) : null}
             <div className="mt-5 flex flex-wrap items-end gap-3">
               <Button
-                disabled={!native || backupState === "working"}
+                disabled={!native || backupBusy}
                 onClick={() => void createBackup()}
               >
-                {backupState === "working" ? "Working…" : "Back Up Now"}
+                {backupAction === "local-create" ? (
+                  <>
+                    <LoaderCircle
+                      aria-hidden="true"
+                      className="size-4 animate-spin"
+                    />{" "}
+                    Creating…
+                  </>
+                ) : (
+                  "Back Up Now"
+                )}
               </Button>
               <Button
                 variant="secondary"
-                disabled={!native || backupState === "working"}
-                onClick={() => void onExportBackup()}
+                disabled={!native || backupBusy}
+                onClick={() =>
+                  void runBackupAction("local-export", onExportBackup)
+                }
               >
-                Export Backup
+                {backupAction === "local-export" ? (
+                  <>
+                    <LoaderCircle
+                      aria-hidden="true"
+                      className="size-4 animate-spin"
+                    />{" "}
+                    Exporting…
+                  </>
+                ) : (
+                  "Export Backup"
+                )}
               </Button>
               {native && backups.length ? (
                 <label className="min-w-64 text-sm font-semibold">
@@ -820,19 +942,61 @@ export function SettingsScreen({
                     {backups.map((backup) => (
                       <option key={backup.fileName} value={backup.fileName}>
                         {backup.kind.replace("_", " ")} ·{" "}
-                        {formatBackupDate(backup)}
+                        {formatBackupDate(backup)} · {backup.verificationStatus}
                       </option>
                     ))}
                   </Select>
                 </label>
               ) : null}
               {native && selectedBackup && !confirmRestore ? (
-                <Button
-                  variant="secondary"
-                  onClick={() => setConfirmRestore(true)}
-                >
-                  Restore selected backup
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    disabled={backupBusy}
+                    onClick={() => void verifySelectedBackup()}
+                  >
+                    {backupAction === "local-verify" ? (
+                      <>
+                        <LoaderCircle
+                          aria-hidden="true"
+                          className="size-4 animate-spin"
+                        />{" "}
+                        Verifying…
+                      </>
+                    ) : (
+                      "Verify selected"
+                    )}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={backupBusy}
+                    onClick={() => setConfirmRestore(true)}
+                  >
+                    Restore selected backup
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={backupBusy}
+                    onClick={() => {
+                      if (window.confirm("Delete this backup?"))
+                        void runBackupAction("local-delete", () =>
+                          onDeleteBackup(selectedBackup),
+                        );
+                    }}
+                  >
+                    {backupAction === "local-delete" ? (
+                      <>
+                        <LoaderCircle
+                          aria-hidden="true"
+                          className="size-4 animate-spin"
+                        />{" "}
+                        Deleting…
+                      </>
+                    ) : (
+                      "Delete selected"
+                    )}
+                  </Button>
+                </div>
               ) : null}
             </div>
             {confirmRestore ? (
@@ -846,21 +1010,329 @@ export function SettingsScreen({
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button
                     variant="secondary"
+                    disabled={backupBusy}
                     onClick={() => setConfirmRestore(false)}
                   >
                     Cancel
                   </Button>
-                  <Button
-                    disabled={backupState === "working"}
-                    onClick={() => void restore()}
-                  >
-                    {backupState === "working"
-                      ? "Restoring…"
-                      : "Confirm restore"}
+                  <Button disabled={backupBusy} onClick={() => void restore()}>
+                    {backupAction === "local-restore" ? (
+                      <>
+                        <LoaderCircle
+                          aria-hidden="true"
+                          className="size-4 animate-spin"
+                        />{" "}
+                        Restoring…
+                      </>
+                    ) : (
+                      "Confirm restore"
+                    )}
                   </Button>
                 </div>
               </div>
             ) : null}
+          </Card>
+          <Card className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">
+                  Cloud backup
+                </p>
+                <h2 className="mt-1 text-lg font-black">Google Drive</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Backups are not encrypted by ATE05. Anyone with access to this
+                  Google account or a backup file may be able to view the
+                  restaurant data. New backups restore on another computer after
+                  connecting the same Google account. Older encrypted backups
+                  may still need the key originally used to create them.
+                </p>
+              </div>
+              <Badge
+                tone={
+                  cloudStatus?.connected
+                    ? cloudStatus.status === "drive_unavailable"
+                      ? "warning"
+                      : "success"
+                    : cloudStatus?.status === "credential_store_unavailable" ||
+                        cloudStatus?.status === "needs_attention" ||
+                        cloudStatus?.status === "authorization_required"
+                      ? "warning"
+                      : "neutral"
+                }
+              >
+                {cloudStatus === null
+                  ? "Checking connection…"
+                  : cloudStatus.connected
+                    ? cloudStatus.status === "drive_unavailable"
+                      ? "Drive temporarily unavailable"
+                      : cloudStatus.status.replaceAll("_", " ")
+                    : cloudStatus?.status === "credential_store_unavailable"
+                      ? "Connection unavailable"
+                      : cloudStatus.status === "authorization_required"
+                        ? "Reconnect required"
+                        : cloudStatus?.status === "needs_attention"
+                          ? "Needs attention"
+                          : "Disconnected"}
+              </Badge>
+            </div>
+            {!native ? (
+              <p className="mt-4 rounded-md bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+                Native Google Drive connection and cloud backup are unavailable
+                in browser preview.
+              </p>
+            ) : cloudStatus === null ? (
+              <p
+                role="status"
+                aria-live="polite"
+                className="mt-4 flex items-center gap-2 text-sm text-muted-foreground"
+              >
+                <LoaderCircle
+                  aria-hidden="true"
+                  className="size-4 animate-spin"
+                />
+                Checking the saved Google Drive connection…
+              </p>
+            ) : !cloudStatus.connected &&
+              cloudStatus.status !== "disconnected" ? (
+              <div className="mt-4 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm">
+                <p>
+                  {cloudStatus.status === "credential_store_unavailable"
+                    ? "ATE05 could not read the saved Google Drive connection. Unlock your desktop keyring, then check again."
+                    : cloudStatus.status === "authorization_required"
+                      ? "Google no longer accepts the saved connection. Reconnect Google Drive to continue."
+                      : "The saved Google Drive connection needs attention. Check again or reconnect."}
+                </p>
+                <Button
+                  className="mt-3"
+                  variant="secondary"
+                  disabled={backupBusy}
+                  onClick={() =>
+                    void runBackupAction(
+                      "drive-refresh",
+                      onRefreshCloudConnection,
+                    )
+                  }
+                >
+                  {backupAction === "drive-refresh" ? (
+                    <>
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="size-4 animate-spin"
+                      />{" "}
+                      Checking…
+                    </>
+                  ) : (
+                    "Check connection again"
+                  )}
+                </Button>
+                <Button
+                  className="mt-3 ml-2"
+                  disabled={backupBusy}
+                  onClick={() => {
+                    void runBackupAction("drive-connect", onConnectGoogleDrive);
+                  }}
+                >
+                  {backupAction === "drive-connect" ? (
+                    <>
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="size-4 animate-spin"
+                      />{" "}
+                      Connecting…
+                    </>
+                  ) : (
+                    "Reconnect Google Drive"
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <>
+                {cloudStatus.status === "drive_unavailable" ? (
+                  <p
+                    role="status"
+                    className="mt-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm"
+                  >
+                    Google could not be reached to refresh the saved connection.
+                    The connection was kept. Try again when you are online.
+                  </p>
+                ) : null}
+                <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+                  <span>
+                    Connected account:{" "}
+                    <strong>{cloudStatus.accountEmail}</strong>
+                  </span>
+                  <Button
+                    variant="secondary"
+                    disabled={backupBusy}
+                    onClick={() =>
+                      void runBackupAction(
+                        "drive-disconnect",
+                        onDisconnectGoogleDrive,
+                      )
+                    }
+                  >
+                    {backupAction === "drive-disconnect" ? (
+                      <>
+                        <LoaderCircle
+                          aria-hidden="true"
+                          className="size-4 animate-spin"
+                        />{" "}
+                        Disconnecting…
+                      </>
+                    ) : (
+                      "Disconnect"
+                    )}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={backupBusy}
+                    onClick={() =>
+                      void runBackupAction(
+                        "drive-refresh",
+                        onRefreshCloudConnection,
+                      )
+                    }
+                  >
+                    {backupAction === "drive-refresh"
+                      ? "Refreshing…"
+                      : "Refresh Drive history"}
+                  </Button>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-3 border-y py-4">
+                  <label className="flex items-center gap-2 text-sm font-semibold">
+                    <Checkbox
+                      checked={cloudStatus.automaticEnabled}
+                      disabled={backupBusy}
+                      onChange={(event) =>
+                        void runBackupAction("drive-automatic", () =>
+                          onSetCloudAutomatic(event.target.checked),
+                        )
+                      }
+                    />
+                    Enable automatic cloud backup
+                  </label>
+                  <Button
+                    variant="secondary"
+                    disabled={backupBusy}
+                    onClick={() =>
+                      void runBackupAction("drive-create", onBackupToDrive)
+                    }
+                  >
+                    {backupAction === "drive-create" ? (
+                      <>
+                        <LoaderCircle
+                          aria-hidden="true"
+                          className="size-4 animate-spin"
+                        />{" "}
+                        Uploading…
+                      </>
+                    ) : (
+                      "Back Up to Drive Now"
+                    )}
+                  </Button>
+                </div>
+                <div className="mt-4 flex flex-wrap items-end gap-3">
+                  <label className="min-w-64 text-sm font-semibold">
+                    Cloud backup history
+                    <Select
+                      className="mt-1 min-h-11 font-normal"
+                      value={selectedCloudBackup}
+                      onChange={(event) =>
+                        setSelectedCloudBackup(event.target.value)
+                      }
+                    >
+                      <option value="">Choose a cloud backup</option>
+                      {cloudBackups.map((backup) => (
+                        <option key={backup.remoteId} value={backup.remoteId}>
+                          {new Date(backup.createdAt).toLocaleString()} ·{" "}
+                          {backup.status}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  {selectedCloudBackup ? (
+                    <>
+                      <Button
+                        variant="secondary"
+                        disabled={backupBusy}
+                        onClick={() =>
+                          void runBackupAction("drive-restore", () =>
+                            onRestoreCloudBackup(selectedCloudBackup),
+                          )
+                        }
+                      >
+                        {backupAction === "drive-restore" ? (
+                          <>
+                            <LoaderCircle
+                              aria-hidden="true"
+                              className="size-4 animate-spin"
+                            />{" "}
+                            Restoring…
+                          </>
+                        ) : (
+                          "Restore cloud backup"
+                        )}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={backupBusy}
+                        onClick={() => {
+                          if (window.confirm("Delete this cloud backup?"))
+                            void runBackupAction("drive-delete", () =>
+                              onDeleteCloudBackup(selectedCloudBackup),
+                            );
+                        }}
+                      >
+                        {backupAction === "drive-delete" ? (
+                          <>
+                            <LoaderCircle
+                              aria-hidden="true"
+                              className="size-4 animate-spin"
+                            />{" "}
+                            Deleting…
+                          </>
+                        ) : (
+                          "Delete cloud backup"
+                        )}
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+                {cloudBackupsError ? (
+                  <div
+                    role="alert"
+                    className="mt-3 flex flex-wrap items-center gap-3 text-sm text-destructive"
+                  >
+                    <p>
+                      Cloud backup history could not be loaded. Check the Google
+                      Drive connection and try again.
+                    </p>
+                    <Button
+                      variant="secondary"
+                      disabled={backupBusy}
+                      onClick={() =>
+                        void runBackupAction(
+                          "drive-refresh",
+                          onRefreshCloudConnection,
+                        )
+                      }
+                    >
+                      {backupAction === "drive-refresh" ? (
+                        <>
+                          <LoaderCircle
+                            aria-hidden="true"
+                            className="size-4 animate-spin"
+                          />{" "}
+                          Refreshing…
+                        </>
+                      ) : (
+                        "Refresh Drive history"
+                      )}
+                    </Button>
+                  </div>
+                ) : null}
+              </>
+            )}
           </Card>
           <Card className="p-5">
             <p className="text-xs font-bold uppercase tracking-wider text-primary">

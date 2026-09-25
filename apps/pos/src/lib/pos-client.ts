@@ -159,11 +159,42 @@ export type PosPrinterConfig = PrinterConfig;
 
 export interface BackupInfo {
   fileName: string;
-  kind: "automatic" | "manual" | "pre_restore";
+  kind: "automatic" | "manual" | "pre_restore" | "unknown";
   createdAt: number;
   schemaVersion: number;
   sizeBytes: number;
   valid: boolean;
+  formatVersion: number;
+  appVersion: string;
+  backupId: string;
+  checksum: string;
+  verificationStatus: string;
+  encrypted: boolean;
+}
+
+export interface CloudStatus {
+  connected: boolean;
+  accountEmail: string | null;
+  automaticEnabled: boolean;
+  status: string;
+  lastSuccess: number | null;
+  pending: number;
+}
+
+export interface RemoteBackup {
+  remoteId: string;
+  name: string;
+  sizeBytes: number;
+  createdAt: string;
+  backupId: string | null;
+  status: string;
+}
+
+export interface CloudBackupResult {
+  localFileName: string;
+  remote: RemoteBackup | null;
+  status: string;
+  message: string;
 }
 
 export interface DatabaseHealth {
