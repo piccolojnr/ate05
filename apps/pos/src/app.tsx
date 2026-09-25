@@ -18,7 +18,6 @@ import type {
   DatabaseHealth,
   SessionUser,
   AuthUser,
-  RecoveryKeyStatus,
   CloudBackupResult,
   CloudStatus,
   RemoteBackup,
@@ -54,8 +53,9 @@ export function App() {
   );
   const [cloudStatus, setCloudStatus] = useState<CloudStatus | null>(null);
   const [cloudBackups, setCloudBackups] = useState<RemoteBackup[]>([]);
-  const [recoveryKeyStatus, setRecoveryKeyStatus] =
-    useState<RecoveryKeyStatus | null>(null);
+  const [cloudBackupsError, setCloudBackupsError] = useState<string | null>(
+    null,
+  );
   const [staff, setStaff] = useState<AuthUser[]>([]);
   const [menuManagement, setMenuManagement] =
     useState<MenuManagementData | null>(null);
@@ -82,6 +82,25 @@ export function App() {
     [order],
   );
 
+  const refreshCloudData = useCallback(async (connected: boolean) => {
+    if (!connected) {
+      setCloudBackups([]);
+      setCloudBackupsError(null);
+      return;
+    }
+    const [backupsResult] = await Promise.allSettled([
+      client.listCloudBackups(),
+    ]);
+    setCloudBackups(
+      backupsResult.status === "fulfilled" ? backupsResult.value : [],
+    );
+    setCloudBackupsError(
+      backupsResult.status === "rejected"
+        ? String(backupsResult.reason ?? "cloud_backup_list_unavailable")
+        : null,
+    );
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -93,7 +112,6 @@ export function App() {
         nextHealth,
         nextStaff,
         nextCloud,
-        nextRecoveryKeyStatus,
       ] = await Promise.all([
         client.bootstrap(),
         client.listPrinters(),
@@ -104,7 +122,6 @@ export function App() {
           ? client.listStaff()
           : Promise.resolve([]),
         client.cloudStatus(),
-        client.recoveryKeyStatus(),
       ]);
       setBootstrap(nextBootstrap);
       setPrinters(nextPrinters);
@@ -113,10 +130,7 @@ export function App() {
       setDatabaseHealth(nextHealth);
       setStaff(nextStaff);
       setCloudStatus(nextCloud);
-      setRecoveryKeyStatus(nextRecoveryKeyStatus);
-      setCloudBackups(
-        nextCloud.connected ? await client.listCloudBackups() : [],
-      );
+      await refreshCloudData(nextCloud.connected);
     } catch (cause) {
       notify.error(
         cause instanceof Error
@@ -126,7 +140,7 @@ export function App() {
     } finally {
       setLoading(false);
     }
-  }, [session]);
+  }, [refreshCloudData, session]);
   async function refreshMenu() {
     setMenuManagement(await client.listMenuManagement());
     const nextBootstrap = await client.bootstrap();
@@ -557,9 +571,9 @@ export function App() {
       throw cause;
     }
   }
-  async function restoreBackup(fileName: string, recoveryKey?: string) {
+  async function restoreBackup(fileName: string) {
     try {
-      await client.restoreBackup(fileName, recoveryKey);
+      await client.restoreBackup(fileName);
       setOrder(null);
       await refresh();
       notify.success("Backup restored. Local data has been reloaded.");
@@ -570,20 +584,9 @@ export function App() {
       throw cause;
     }
   }
-  async function createRecoveryKey() {
-    const key = await client.createRecoveryKey();
-    notify.success("Recovery key is ready. Save it somewhere secure.");
-    return key;
-  }
-  async function saveRecoveryKey(recoveryKey: string) {
-    await client.saveRecoveryKey(recoveryKey);
-    notify.success(
-      "Recovery key saved in this computer's secure credential store.",
-    );
-  }
-  async function verifyBackup(fileName: string, recoveryKey?: string) {
+  async function verifyBackup(fileName: string) {
     try {
-      const info = await client.verifyBackup(fileName, recoveryKey);
+      const info = await client.verifyBackup(fileName);
       setBackups(await client.listBackups());
       notify.success(`Backup verified · ${info.appVersion}`);
     } catch (cause) {
@@ -610,10 +613,10 @@ export function App() {
       const status = await client.connectGoogleDrive();
       setCloudStatus(status);
       notify.success(
-        "Google Drive connected. Backups remain encrypted before upload.",
+        "Google Drive connected. Backups are available to this Google account.",
       );
       try {
-        setCloudBackups(await client.listCloudBackups());
+        await refreshCloudData(status.connected);
       } catch (cause) {
         notify.error(
           `Google Drive connected, but backup history could not be loaded: ${
@@ -639,10 +642,23 @@ export function App() {
   async function disconnectGoogleDrive() {
     await client.disconnectGoogleDrive();
     setCloudStatus(await client.cloudStatus());
-    setCloudBackups([]);
+    await refreshCloudData(false);
     notify.success(
       "Google Drive disconnected. Existing Drive backups were not deleted.",
     );
+  }
+  async function refreshCloudConnection() {
+    try {
+      const status = await client.cloudStatus();
+      setCloudStatus(status);
+      await refreshCloudData(status.connected);
+    } catch (cause) {
+      notify.error(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to check the saved Google Drive connection.",
+      );
+    }
   }
   async function setCloudAutomatic(enabled: boolean) {
     const status = await client.setCloudAutomatic(enabled);
@@ -660,9 +676,9 @@ export function App() {
     setCloudBackups(await client.listCloudBackups());
     notify.success("Cloud backup deleted.");
   }
-  async function restoreCloudBackup(remoteId: string, recoveryKey?: string) {
+  async function restoreCloudBackup(remoteId: string) {
     try {
-      await client.restoreCloudBackup(remoteId, recoveryKey);
+      await client.restoreCloudBackup(remoteId);
       setOrder(null);
       await refresh();
       notify.success("Cloud backup restored. Local data has been reloaded.");
@@ -848,13 +864,12 @@ export function App() {
             onBackupNow={backupNow}
             onExportBackup={exportBackup}
             onRestoreBackup={restoreBackup}
-            onCreateRecoveryKey={createRecoveryKey}
-            onSaveRecoveryKey={saveRecoveryKey}
             onVerifyBackup={verifyBackup}
             onDeleteBackup={deleteBackup}
             cloudStatus={cloudStatus}
             cloudBackups={cloudBackups}
-            recoveryKeyConfigured={recoveryKeyStatus?.configured ?? false}
+            cloudBackupsError={cloudBackupsError}
+            onRefreshCloudConnection={refreshCloudConnection}
             onConnectGoogleDrive={connectGoogleDrive}
             onDisconnectGoogleDrive={disconnectGoogleDrive}
             onSetCloudAutomatic={setCloudAutomatic}

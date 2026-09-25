@@ -12,7 +12,6 @@ mod backup;
 mod database;
 mod device;
 mod drive;
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PrinterRequest {
@@ -426,7 +425,7 @@ fn main() {
                 });
                 if let Err(error) = automatic_result {
                     eprintln!("[ATE05] automatic backup warning: {error}");
-                } else if drive::status()
+                } else if tauri::async_runtime::block_on(drive::status())
                     .map(|status| status.connected && status.automatic_enabled)
                     .unwrap_or(false)
                 {
@@ -455,9 +454,6 @@ fn main() {
             list_backups,
             verify_backup,
             delete_backup,
-            backup_recovery_status,
-            create_backup_recovery_key,
-            save_backup_recovery_key,
             backup_now,
             database_health,
             restore_backup,
@@ -523,29 +519,11 @@ async fn list_backups(app: tauri::AppHandle) -> Result<Vec<backup::BackupInfo>, 
 async fn verify_backup(
     app: tauri::AppHandle,
     file_name: String,
-    recovery_key: Option<String>,
 ) -> Result<backup::BackupInfo, String> {
     let (_, backups_dir) = native_paths(&app)?;
-    backup::verify_named_with_key(&backups_dir, &file_name, recovery_key.as_deref())
+    backup::verify_named_with_key(&backups_dir, &file_name, None)
         .await
         .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn backup_recovery_status() -> Result<backup::RecoveryKeyStatus, String> {
-    backup::recovery_status()
-}
-
-#[tauri::command]
-fn create_backup_recovery_key(app: tauri::AppHandle) -> Result<String, String> {
-    auth::require_permission(&app, "backup")?;
-    backup::ensure_recovery_key().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn save_backup_recovery_key(app: tauri::AppHandle, recovery_key: String) -> Result<(), String> {
-    auth::require_permission(&app, "backup")?;
-    backup::set_recovery_key(&recovery_key)
 }
 
 #[tauri::command]
@@ -573,19 +551,12 @@ async fn database_health(app: tauri::AppHandle) -> Result<backup::DatabaseHealth
 async fn restore_backup(
     app: tauri::AppHandle,
     file_name: String,
-    recovery_key: Option<String>,
 ) -> Result<backup::BackupInfo, String> {
     auth::require_permission(&app, "backup")?;
     let pool = native_pool(&app).await?;
     let (database_path, backups_dir) = native_paths(&app)?;
-    let (new_pool, info) = backup::restore(
-        pool,
-        &database_path,
-        &backups_dir,
-        &file_name,
-        recovery_key.as_deref(),
-    )
-    .await?;
+    let (new_pool, info) =
+        backup::restore(pool, &database_path, &backups_dir, &file_name, None).await?;
     let instances = app.state::<tauri_plugin_sql::DbInstances>();
     let previous = instances.0.write().await.insert(
         "sqlite:ate05.db".into(),
@@ -613,14 +584,17 @@ async fn connect_google_drive(app: tauri::AppHandle) -> Result<drive::CloudStatu
 }
 
 #[tauri::command]
-fn cloud_status() -> Result<drive::CloudStatus, String> {
-    drive::status()
+async fn cloud_status() -> Result<drive::CloudStatus, String> {
+    drive::status().await
 }
 
 #[tauri::command]
-fn set_cloud_automatic(app: tauri::AppHandle, enabled: bool) -> Result<drive::CloudStatus, String> {
+async fn set_cloud_automatic(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<drive::CloudStatus, String> {
     auth::require_permission(&app, "backup")?;
-    drive::set_automatic(enabled)
+    drive::set_automatic(enabled).await
 }
 
 #[tauri::command]
@@ -640,7 +614,7 @@ async fn backup_to_drive(app: tauri::AppHandle) -> Result<drive::CloudBackupResu
     auth::require_permission(&app, "backup")?;
     let pool = native_pool(&app).await?;
     let (_, backups_dir) = native_paths(&app)?;
-    let local = backup::create(&pool, &backups_dir, "manual").await?;
+    let local = backup::create_cloud(&pool, &backups_dir, "manual").await?;
     let path = backups_dir.join(&local.file_name);
     let result = drive::upload_backup_file(&path).await;
     let recorded = drive::record_upload(&path.to_string_lossy(), result).await;
@@ -649,7 +623,7 @@ async fn backup_to_drive(app: tauri::AppHandle) -> Result<drive::CloudBackupResu
             local_file_name: local.file_name,
             remote: Some(remote),
             status: "uploaded".into(),
-            message: "Encrypted backup uploaded to Google Drive.".into(),
+            message: "Backup uploaded to Google Drive.".into(),
         },
         Err(error) => drive::CloudBackupResult {
             local_file_name: local.file_name,
@@ -670,7 +644,6 @@ async fn delete_cloud_backup(app: tauri::AppHandle, remote_id: String) -> Result
 async fn restore_cloud_backup(
     app: tauri::AppHandle,
     remote_id: String,
-    recovery_key: Option<String>,
 ) -> Result<backup::BackupInfo, String> {
     auth::require_permission(&app, "backup")?;
     let pool = native_pool(&app).await?;
@@ -682,14 +655,7 @@ async fn restore_cloud_backup(
         let _ = fs::remove_file(&path);
         return Err(error.to_string());
     }
-    let restored = backup::restore(
-        pool,
-        &database_path,
-        &backups_dir,
-        &file_name,
-        recovery_key.as_deref(),
-    )
-    .await;
+    let restored = backup::restore(pool, &database_path, &backups_dir, &file_name, None).await;
     let _ = fs::remove_file(&path);
     let (new_pool, info) = restored?;
     let instances = app.state::<tauri_plugin_sql::DbInstances>();

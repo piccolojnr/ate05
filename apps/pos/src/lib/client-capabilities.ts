@@ -4,7 +4,6 @@ import type {
   AuthBootstrap,
   AuthUser,
   BackupInfo,
-  RecoveryKeyStatus,
   DatabaseHealth,
   CloudBackupResult,
   CloudStatus,
@@ -235,15 +234,12 @@ export interface SettingsClient {
 
 export interface RecoveryClient {
   listBackups(): Promise<BackupInfo[]>;
-  verifyBackup(fileName: string, recoveryKey?: string): Promise<BackupInfo>;
+  verifyBackup(fileName: string): Promise<BackupInfo>;
   deleteBackup(fileName: string): Promise<void>;
-  recoveryKeyStatus(): Promise<RecoveryKeyStatus>;
-  createRecoveryKey(): Promise<string>;
-  saveRecoveryKey(recoveryKey: string): Promise<void>;
   backupNow(): Promise<BackupInfo>;
   exportBackup(): Promise<string | null>;
   databaseHealth(): Promise<DatabaseHealth>;
-  restoreBackup(fileName: string, recoveryKey?: string): Promise<BackupInfo>;
+  restoreBackup(fileName: string): Promise<BackupInfo>;
   cloudStatus(): Promise<CloudStatus>;
   connectGoogleDrive(): Promise<CloudStatus>;
   disconnectGoogleDrive(): Promise<void>;
@@ -251,8 +247,5 @@ export interface RecoveryClient {
   listCloudBackups(): Promise<RemoteBackup[]>;
   backupToDrive(): Promise<CloudBackupResult>;
   deleteCloudBackup(remoteId: string): Promise<void>;
-  restoreCloudBackup(
-    remoteId: string,
-    recoveryKey?: string,
-  ): Promise<BackupInfo>;
+  restoreCloudBackup(remoteId: string): Promise<BackupInfo>;
 }

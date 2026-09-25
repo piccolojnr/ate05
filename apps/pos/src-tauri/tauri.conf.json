@@ -16,6 +16,7 @@
         "title": "ATE05 POS",
         "width": 1200,
         "height": 800,
+        "maximized": true,
         "resizable": true
       }
     ],

@@ -172,10 +172,6 @@ export interface BackupInfo {
   encrypted: boolean;
 }
 
-export interface RecoveryKeyStatus {
-  configured: boolean;
-}
-
 export interface CloudStatus {
   connected: boolean;
   accountEmail: string | null;

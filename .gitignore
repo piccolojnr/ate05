@@ -8,3 +8,5 @@ apps/pos/src-tauri/target/
 apps/pos/src-tauri/gen/
 *.db
 *.db-journal
+/.env.local
+/client_secret*.json

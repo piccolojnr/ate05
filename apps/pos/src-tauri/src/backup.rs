@@ -19,6 +19,7 @@ use tar::{Archive, Builder, Header};
 use uuid::Uuid;
 
 pub const BACKUP_FORMAT_VERSION: u32 = 2;
+const PLAIN_BACKUP_FORMAT_VERSION: u32 = 3;
 const LEGACY_FORMAT_VERSION: u32 = 1;
 const CURRENT_SCHEMA_VERSION: i64 = 6;
 const AUTOMATIC_RETENTION: usize = 14;
@@ -72,12 +73,6 @@ pub struct DatabaseHealth {
     pub schema_version: i64,
     pub message: String,
 }
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecoveryKeyStatus {
-    pub configured: bool,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "code", content = "message")]
 pub enum BackupError {
@@ -246,43 +241,6 @@ fn keyring_entry() -> Result<Entry, BackupError> {
     Entry::new(SERVICE, KEY_NAME)
         .map_err(|e| BackupError::Disk(format!("secure credential storage unavailable ({e})")))
 }
-fn generate_recovery_key() -> String {
-    let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    hex(&bytes)
-}
-pub fn recovery_status() -> Result<RecoveryKeyStatus, String> {
-    let entry = keyring_entry().map_err(|e| e.to_string())?;
-    Ok(RecoveryKeyStatus {
-        configured: entry.get_password().is_ok(),
-    })
-}
-pub fn ensure_recovery_key() -> Result<String, BackupError> {
-    let entry = keyring_entry()?;
-    match entry.get_password() {
-        Ok(key) if !key.is_empty() => Ok(key),
-        _ => {
-            let key = generate_recovery_key();
-            entry.set_password(&key).map_err(|e| {
-                BackupError::Disk(format!("could not store recovery credential ({e})"))
-            })?;
-            Ok(key)
-        }
-    }
-}
-pub fn set_recovery_key(key: &str) -> Result<(), String> {
-    if key.len() < 32 {
-        return Err(
-            BackupError::RecoveryRequired("recovery credential is too short".into()).to_string(),
-        );
-    }
-    keyring_entry()
-        .map_err(|e| e.to_string())?
-        .set_password(key)
-        .map_err(|e| {
-            BackupError::Disk(format!("could not store recovery credential ({e})")).to_string()
-        })
-}
 fn derive_key(secret: &str, salt: &[u8]) -> Result<[u8; 32], BackupError> {
     let mut key = [0u8; 32];
     Argon2::new(
@@ -299,7 +257,9 @@ fn recovery_key(provided: Option<&str>) -> Result<String, BackupError> {
     match provided {
         Some(value) if !value.is_empty() => Ok(value.to_owned()),
         _ => keyring_entry()?.get_password().map_err(|_| {
-            BackupError::RecoveryRequired("enter the owner recovery credential".into())
+            BackupError::RecoveryRequired(
+                "this older encrypted backup needs the original recovery key, which is not available on this computer".into(),
+            )
         }),
     }
 }
@@ -642,6 +602,85 @@ async fn verify_legacy(path: &Path) -> Result<BackupInfo, BackupError> {
         encrypted: false,
     })
 }
+async fn verify_unencrypted(path: &Path) -> Result<BackupInfo, BackupError> {
+    let staging = path.with_file_name(format!(".verify-{}", Uuid::new_v4()));
+    fs::create_dir_all(&staging).map_err(|e| BackupError::Disk(e.to_string()))?;
+    let result = verify_unencrypted_with_staging(path, &staging).await;
+    let _ = fs::remove_dir_all(&staging);
+    result
+}
+async fn verify_unencrypted_with_staging(
+    path: &Path,
+    staging: &Path,
+) -> Result<BackupInfo, BackupError> {
+    let mut file = fs::File::open(path).map_err(|e| BackupError::MissingFile(e.to_string()))?;
+    let (header, _) = read_header(&mut file)?;
+    if header.format_version != PLAIN_BACKUP_FORMAT_VERSION
+        || header.encryption != "none"
+        || header.kdf != "none"
+    {
+        return Err(BackupError::UnsupportedFormat(
+            "plain backup format is not supported".into(),
+        ));
+    }
+    let tar_path = staging.join("payload.tar");
+    let mut tar = fs::File::create(&tar_path).map_err(|e| BackupError::Disk(e.to_string()))?;
+    std::io::copy(&mut file, &mut tar).map_err(|e| BackupError::Disk(e.to_string()))?;
+    tar.sync_all()
+        .map_err(|e| BackupError::Disk(e.to_string()))?;
+    extract_payload(&tar_path, staging)?;
+    let manifest: Manifest = serde_json::from_slice(
+        &fs::read(staging.join("manifest.json"))
+            .map_err(|e| BackupError::MissingFile(e.to_string()))?,
+    )
+    .map_err(|e| BackupError::MalformedManifest(e.to_string()))?;
+    if manifest.format_version != PLAIN_BACKUP_FORMAT_VERSION
+        || manifest.database_file != "database.sqlite"
+        || manifest.encryption != "none"
+        || manifest.backup_id != header.backup_id
+    {
+        return Err(BackupError::MalformedManifest(
+            "plain backup metadata is invalid".into(),
+        ));
+    }
+    let db = staging.join("database.sqlite");
+    let checksum = sha256_file(&db)?;
+    if checksum != manifest.database_sha256 {
+        return Err(BackupError::ChecksumMismatch(
+            "database checksum does not match manifest".into(),
+        ));
+    }
+    let schema = check_database(&db).await?;
+    Ok(BackupInfo {
+        file_name: path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or_default()
+            .into(),
+        kind: header.kind,
+        created_at: manifest.created_at,
+        schema_version: schema,
+        size_bytes: fs::metadata(path)
+            .map_err(|e| BackupError::Disk(e.to_string()))?
+            .len(),
+        valid: true,
+        format_version: PLAIN_BACKUP_FORMAT_VERSION,
+        app_version: manifest.app_version,
+        backup_id: manifest.backup_id,
+        checksum,
+        verification_status: "verified (not encrypted)".into(),
+        encrypted: false,
+    })
+}
+async fn verify_file(path: &Path, supplied_key: Option<&str>) -> Result<BackupInfo, BackupError> {
+    let mut file = fs::File::open(path).map_err(|e| BackupError::MissingFile(e.to_string()))?;
+    let (header, _) = read_header(&mut file)?;
+    match header.format_version {
+        PLAIN_BACKUP_FORMAT_VERSION => verify_unencrypted(path).await,
+        BACKUP_FORMAT_VERSION => verify_encrypted(path, supplied_key).await,
+        _ => Err(BackupError::UnsupportedFormat("unsupported format".into())),
+    }
+}
 async fn verify_encrypted(
     path: &Path,
     supplied_key: Option<&str>,
@@ -661,11 +700,7 @@ pub async fn verify_named_with_key(
     if path.is_dir() {
         verify_legacy(&path).await
     } else {
-        let staging = path.with_file_name(format!(".verify-{}", Uuid::new_v4()));
-        fs::create_dir_all(&staging).map_err(|e| BackupError::Disk(e.to_string()))?;
-        let result = verify_encrypted_with_staging(&path, supplied_key, &staging).await;
-        let _ = fs::remove_dir_all(&staging);
-        result
+        verify_file(&path, supplied_key).await
     }
 }
 
@@ -692,8 +727,86 @@ pub async fn create(
     backups_dir: &Path,
     kind: &str,
 ) -> Result<BackupInfo, String> {
-    let key = ensure_recovery_key().map_err(|e| e.to_string())?;
-    create_with_key(pool, backups_dir, kind, &key).await
+    create_unencrypted(pool, backups_dir, kind).await
+}
+pub async fn create_cloud(
+    pool: &SqlitePool,
+    backups_dir: &Path,
+    kind: &str,
+) -> Result<BackupInfo, String> {
+    create_unencrypted(pool, backups_dir, kind).await
+}
+async fn create_unencrypted(
+    pool: &SqlitePool,
+    backups_dir: &Path,
+    kind: &str,
+) -> Result<BackupInfo, String> {
+    fs::create_dir_all(backups_dir).map_err(|e| BackupError::Disk(e.to_string()).to_string())?;
+    let staging = backups_dir.join(format!(".create-{}", Uuid::new_v4()));
+    fs::create_dir_all(&staging).map_err(|e| BackupError::Disk(e.to_string()).to_string())?;
+    let result = async {
+        let db = staging.join("database.sqlite");
+        snapshot(pool, &db).await?;
+        let schema = check_database(&db).await?;
+        let id = Uuid::new_v4().to_string();
+        let created = now();
+        let manifest = Manifest {
+            format_version: PLAIN_BACKUP_FORMAT_VERSION,
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            schema_version: schema,
+            business_id: business_id(pool).await,
+            created_at: created,
+            backup_id: id.clone(),
+            database_file: "database.sqlite".into(),
+            database_sha256: sha256_file(&db)?,
+            encryption: "none".into(),
+        };
+        let manifest_path = staging.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest)
+                .map_err(|e| BackupError::MalformedManifest(e.to_string()))?,
+        )
+        .map_err(|e| BackupError::Disk(e.to_string()))?;
+        let payload = staging.join("payload.tar");
+        build_payload(&manifest_path, &db, &payload)?;
+        let header = OuterHeader {
+            format_version: PLAIN_BACKUP_FORMAT_VERSION,
+            encryption: "none".into(),
+            kdf: "none".into(),
+            salt: String::new(),
+            nonce: String::new(),
+            created_at: created,
+            backup_id: id.clone(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            kind: kind_name(kind).into(),
+            kdf_memory_kib: 0,
+            kdf_iterations: 0,
+            kdf_parallelism: 0,
+        };
+        let temp_file = staging.join("backup.tmp");
+        let mut output =
+            fs::File::create(&temp_file).map_err(|e| BackupError::Disk(e.to_string()))?;
+        write_header(&mut output, &header)?;
+        let mut payload_file =
+            fs::File::open(&payload).map_err(|e| BackupError::Disk(e.to_string()))?;
+        std::io::copy(&mut payload_file, &mut output)
+            .map_err(|e| BackupError::Disk(e.to_string()))?;
+        output
+            .sync_all()
+            .map_err(|e| BackupError::Disk(e.to_string()))?;
+        let final_name = file_name(kind, &id, created);
+        let final_path = backups_dir.join(&final_name);
+        fs::rename(&temp_file, &final_path)
+            .map_err(|e| BackupError::Disk(format!("could not install backup ({e})")))?;
+        verify_unencrypted(&final_path).await.map_err(|e| {
+            let _ = fs::remove_file(&final_path);
+            e
+        })
+    }
+    .await;
+    let _ = fs::remove_dir_all(&staging);
+    result.map_err(|e: BackupError| e.to_string())
 }
 async fn create_with_key(
     pool: &SqlitePool,
@@ -778,9 +891,20 @@ async fn create_with_key(
     result.map_err(|e: BackupError| e.to_string())
 }
 pub async fn export(pool: &SqlitePool, destination: &Path) -> Result<(), String> {
-    let key = ensure_recovery_key().map_err(|e| e.to_string())?;
-    export_with_key(pool, destination, &key).await
+    if destination.extension().and_then(|v| v.to_str()) != Some("ate05backup") {
+        return Err("validation: choose a destination ending in .ate05backup".into());
+    }
+    if destination.exists() {
+        return Err("backup_failed: a backup with that name already exists".into());
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "backup_failed: export destination has no parent".to_string())?;
+    let created = create_unencrypted(pool, parent, "manual").await?;
+    fs::rename(parent.join(&created.file_name), destination)
+        .map_err(|e| BackupError::Disk(e.to_string()).to_string())
 }
+#[cfg(test)]
 async fn export_with_key(pool: &SqlitePool, destination: &Path, key: &str) -> Result<(), String> {
     if destination.extension().and_then(|v| v.to_str()) != Some("ate05backup") {
         return Err("validation: choose a destination ending in .ate05backup".into());
@@ -816,7 +940,19 @@ pub async fn list(backups_dir: &Path) -> Result<Vec<BackupInfo>, String> {
                     .unwrap_or_else(|_| invalid_info(&entry)),
             );
         } else {
-            result.push(read_listing_info(&path).unwrap_or_else(|_| invalid_info(&entry)));
+            let plain = fs::File::open(&path)
+                .ok()
+                .and_then(|mut file| read_header(&mut file).ok())
+                .is_some_and(|(header, _)| header.format_version == PLAIN_BACKUP_FORMAT_VERSION);
+            if plain {
+                result.push(
+                    verify_unencrypted(&path)
+                        .await
+                        .unwrap_or_else(|_| invalid_info(&entry)),
+                );
+            } else {
+                result.push(read_listing_info(&path).unwrap_or_else(|_| invalid_info(&entry)));
+            }
         }
     }
     result.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -847,6 +983,28 @@ fn invalid_info(entry: &fs::DirEntry) -> BackupInfo {
 fn read_listing_info(path: &Path) -> Result<BackupInfo, BackupError> {
     let mut file = fs::File::open(path).map_err(|e| BackupError::Disk(e.to_string()))?;
     let (header, _) = read_header(&mut file)?;
+    if header.format_version == PLAIN_BACKUP_FORMAT_VERSION {
+        return Ok(BackupInfo {
+            file_name: path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or_default()
+                .into(),
+            kind: header.kind,
+            created_at: header.created_at,
+            schema_version: 0,
+            size_bytes: fs::metadata(path)
+                .map_err(|e| BackupError::Disk(e.to_string()))?
+                .len(),
+            valid: false,
+            format_version: header.format_version,
+            app_version: header.app_version,
+            backup_id: header.backup_id,
+            checksum: String::new(),
+            verification_status: "not verified".into(),
+            encrypted: false,
+        });
+    }
     if header.format_version != BACKUP_FORMAT_VERSION {
         return Err(BackupError::UnsupportedFormat("unsupported format".into()));
     }
@@ -924,12 +1082,10 @@ pub async fn ensure_daily(pool: &SqlitePool, backups_dir: &Path) -> Result<Backu
             .into_iter()
             .find(|b| b.kind == "automatic" && b.created_at / 86_400 == today)
         {
-            if let Ok(key) = ensure_recovery_key() {
-                if let Ok(verified) =
-                    verify_named_with_key(backups_dir, &existing.file_name, Some(&key)).await
-                {
-                    return Ok(verified);
-                }
+            if let Ok(verified) =
+                verify_named_with_key(backups_dir, &existing.file_name, None).await
+            {
+                return Ok(verified);
             }
         }
     }
@@ -949,20 +1105,39 @@ pub async fn restore(
     let staging = backups_dir.join(format!(".restore-{}", Uuid::new_v4()));
     fs::create_dir_all(&staging).map_err(|e| BackupError::Restore(e.to_string()).to_string())?;
     let result = async {
-        let restore_secret = recovery_key(supplied_key)?;
-        let info = if selected.is_dir() {
-            verify_legacy(&selected).await?
+        let (info, plain_format) = if selected.is_dir() {
+            (verify_legacy(&selected).await?, true)
         } else {
-            verify_encrypted_with_staging(&selected, supplied_key, &staging).await?
+            let mut artifact =
+                fs::File::open(&selected).map_err(|e| BackupError::MissingFile(e.to_string()))?;
+            let (header, _) = read_header(&mut artifact)?;
+            if header.format_version == PLAIN_BACKUP_FORMAT_VERSION {
+                (
+                    verify_unencrypted_with_staging(&selected, &staging).await?,
+                    true,
+                )
+            } else {
+                (
+                    verify_encrypted_with_staging(&selected, supplied_key, &staging).await?,
+                    false,
+                )
+            }
         };
         let source = if selected.is_dir() {
             selected.join("database.sqlite")
         } else {
             staging.join("database.sqlite")
         };
-        create_with_key(&pool, backups_dir, "pre_restore", &restore_secret)
-            .await
-            .map_err(BackupError::Restore)?;
+        if plain_format {
+            create_unencrypted(&pool, backups_dir, "pre_restore")
+                .await
+                .map_err(BackupError::Restore)?;
+        } else {
+            let restore_secret = recovery_key(supplied_key)?;
+            create_with_key(&pool, backups_dir, "pre_restore", &restore_secret)
+                .await
+                .map_err(BackupError::Restore)?;
+        }
         let temporary = database_path.with_extension("restore.tmp");
         let previous = database_path.with_extension("swap.tmp");
         let _ = fs::remove_file(&temporary);
@@ -1239,6 +1414,48 @@ mod tests {
                 .iter()
                 .any(|entry| entry.kind == "pre_restore"));
             assert!(!root.join("backups/.restore").exists());
+            let _ = fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn plain_backup_requires_no_recovery_key_and_restores_price_options() {
+        tauri::async_runtime::block_on(async {
+            let root = root();
+            let (db, pool) = fixture(&root).await;
+            let backups_dir = root.join("backups");
+            let backup = create_cloud(&pool, &backups_dir, "manual").await.unwrap();
+            assert_eq!(backup.format_version, PLAIN_BACKUP_FORMAT_VERSION);
+            assert!(!backup.encrypted);
+            assert_eq!(backup.schema_version, CURRENT_SCHEMA_VERSION);
+            let verified = verify_named_with_key(&backups_dir, &backup.file_name, None)
+                .await
+                .unwrap();
+            assert!(verified.valid);
+            assert!(!verified.encrypted);
+
+            sqlx::query(
+                "UPDATE businesses SET name = 'Changed after backup' WHERE id = 'business-1'",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            let (restored, _) = restore(pool, &db, &backups_dir, &backup.file_name, None)
+                .await
+                .unwrap();
+            let option: (String, i64) = sqlx::query_as(
+                "SELECT name, price_minor FROM menu_item_price_options WHERE id = 'option-1'",
+            )
+            .fetch_one(&restored)
+            .await
+            .unwrap();
+            assert_eq!(option, ("Large".into(), 11000));
+            assert!(list(&backups_dir)
+                .await
+                .unwrap()
+                .iter()
+                .any(|entry| entry.kind == "pre_restore" && !entry.encrypted));
+            restored.close().await;
             let _ = fs::remove_dir_all(root);
         });
     }

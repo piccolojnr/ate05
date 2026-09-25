@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
+    future::Future,
     io::{Read, Write},
     net::TcpListener,
     path::Path,
@@ -99,12 +100,14 @@ pub struct CloudBackupResult {
 #[serde(rename_all = "snake_case", tag = "code", content = "message")]
 pub enum CloudError {
     NotConnected(String),
+    AuthorizationRequired(String),
     AuthorizationCancelled(String),
     AuthorizationDenied(String),
     CallbackFailure(String),
     StateMismatch(String),
     TokenExchange(String),
     TokenRefresh(String),
+    CredentialStoreUnavailable(String),
     NetworkUnavailable(String),
     Upload(String),
     Download(String),
@@ -118,12 +121,16 @@ impl std::fmt::Display for CloudError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotConnected(m) => write!(f, "cloud_not_connected: {m}"),
+            Self::AuthorizationRequired(m) => write!(f, "authorization_required: {m}"),
             Self::AuthorizationCancelled(m) => write!(f, "authorization_cancelled: {m}"),
             Self::AuthorizationDenied(m) => write!(f, "authorization_denied: {m}"),
             Self::CallbackFailure(m) => write!(f, "oauth_callback_failure: {m}"),
             Self::StateMismatch(m) => write!(f, "oauth_state_mismatch: {m}"),
             Self::TokenExchange(m) => write!(f, "token_exchange_failed: {m}"),
             Self::TokenRefresh(m) => write!(f, "token_refresh_failed: {m}"),
+            Self::CredentialStoreUnavailable(m) => {
+                write!(f, "credential_store_unavailable: {m}")
+            }
             Self::NetworkUnavailable(m) => write!(f, "network_unavailable: {m}"),
             Self::Upload(m) => write!(f, "cloud_upload_failed: {m}"),
             Self::Download(m) => write!(f, "cloud_download_failed: {m}"),
@@ -145,10 +152,21 @@ struct OAuthStore {
     email: String,
     folder_id: Option<String>,
 }
-static OAUTH_CACHE: OnceLock<Mutex<Option<OAuthStore>>> = OnceLock::new();
+trait OAuthCredentialStore {
+    fn read_oauth(&self) -> Result<OAuthStore, CloudError>;
+    fn write_oauth(&self, store: &OAuthStore) -> Result<(), CloudError>;
+}
 
-fn oauth_cache() -> &'static Mutex<Option<OAuthStore>> {
-    OAUTH_CACHE.get_or_init(|| Mutex::new(None))
+struct SystemOAuthCredentialStore;
+
+impl OAuthCredentialStore for SystemOAuthCredentialStore {
+    fn read_oauth(&self) -> Result<OAuthStore, CloudError> {
+        read_json(OAUTH_KEY)
+    }
+
+    fn write_oauth(&self, store: &OAuthStore) -> Result<(), CloudError> {
+        write_json(OAUTH_KEY, store)
+    }
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct CloudState {
@@ -163,7 +181,6 @@ struct TokenResponse {
     refresh_token: Option<String>,
     expires_in: Option<i64>,
     error: Option<String>,
-    error_description: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 struct UserInfo {
@@ -184,15 +201,35 @@ struct FileList {
     files: Option<Vec<DriveFile>>,
 }
 
+fn is_backup_artifact(
+    name: &str,
+    props: Option<&std::collections::HashMap<String, String>>,
+) -> bool {
+    name.ends_with(".ate05backup")
+        && name != "ATE05 Recovery Envelope.ate05backup"
+        && !props
+            .and_then(|p| p.get("ate05_object_type"))
+            .is_some_and(|v| v == "recovery_envelope")
+}
 fn entry(name: &str) -> Result<Entry, CloudError> {
     Entry::new(OAUTH_SERVICE, name).map_err(|e| {
-        CloudError::TokenRefresh(format!("secure credential storage unavailable ({e})"))
+        CloudError::CredentialStoreUnavailable(format!(
+            "OS credential storage could not be opened ({e})"
+        ))
     })
 }
+fn credential_read_error(error: keyring::Error) -> CloudError {
+    match error {
+        keyring::Error::NoEntry => {
+            CloudError::NotConnected("Google Drive is not connected".into())
+        }
+        _ => CloudError::CredentialStoreUnavailable(
+            "the saved Google Drive connection could not be read from the OS credential store; it may be locked".into(),
+        ),
+    }
+}
 fn read_json<T: for<'a> Deserialize<'a>>(name: &str) -> Result<T, CloudError> {
-    let value = entry(name)?
-        .get_password()
-        .map_err(|_| CloudError::NotConnected("Google Drive is not connected".into()))?;
+    let value = entry(name)?.get_password().map_err(credential_read_error)?;
     serde_json::from_str(&value)
         .map_err(|_| CloudError::Reconciliation("stored cloud state is invalid".into()))
 }
@@ -202,30 +239,41 @@ fn write_json<T: Serialize>(name: &str, value: &T) -> Result<(), CloudError> {
             &serde_json::to_string(value).map_err(|e| CloudError::Reconciliation(e.to_string()))?,
         )
         .map_err(|e| {
-            CloudError::TokenRefresh(format!("secure credential storage unavailable ({e})"))
+            CloudError::CredentialStoreUnavailable(format!(
+                "OS credential storage could not save the Google Drive connection ({e})"
+            ))
         })
 }
 fn load_oauth() -> Result<OAuthStore, CloudError> {
-    if let Ok(cache) = oauth_cache().lock() {
-        if let Some(store) = cache.clone() {
-            return Ok(store);
-        }
-    }
-    let store: OAuthStore = read_json(OAUTH_KEY)?;
-    if let Ok(mut cache) = oauth_cache().lock() {
-        *cache = Some(store.clone());
-    }
-    Ok(store)
+    SystemOAuthCredentialStore.read_oauth()
 }
-fn cache_oauth(store: OAuthStore) {
-    if let Ok(mut cache) = oauth_cache().lock() {
-        *cache = Some(store);
+
+async fn refresh_oauth_if_needed<S, F, Fut>(
+    credentials: &S,
+    mut store: OAuthStore,
+    now: i64,
+    refresh: F,
+) -> Result<(OAuthStore, String), CloudError>
+where
+    S: OAuthCredentialStore,
+    F: FnOnce(OAuthStore) -> Fut,
+    Fut: Future<Output = Result<TokenResponse, CloudError>>,
+{
+    if store.expires_at > now + 60 {
+        return Ok((store.clone(), store.access_token));
     }
-}
-fn clear_oauth_cache() {
-    if let Ok(mut cache) = oauth_cache().lock() {
-        *cache = None;
+
+    let token = refresh(store.clone()).await?;
+    let access_token = token.access_token.ok_or_else(|| {
+        CloudError::AuthorizationRequired("Google did not return a refreshed access token".into())
+    })?;
+    if let Some(refresh_token) = token.refresh_token {
+        store.refresh_token = refresh_token;
     }
+    store.expires_at = now + token.expires_in.unwrap_or(3600).max(0);
+    store.access_token = access_token.clone();
+    credentials.write_oauth(&store)?;
+    Ok((store, access_token))
 }
 fn load_state() -> CloudState {
     read_json(STATE_KEY).unwrap_or_default()
@@ -387,10 +435,11 @@ pub async fn connect() -> Result<CloudStatus, String> {
     })?;
     if !response_status.is_success() {
         return Err(CloudError::TokenExchange(
-            token
-                .error_description
-                .or(token.error)
-                .unwrap_or_else(|| "Google rejected authorization".into()),
+            if token.error.as_deref() == Some("invalid_client") {
+                "Google rejected the configured OAuth client".into()
+            } else {
+                "Google rejected the authorization request".into()
+            },
         )
         .to_string());
     }
@@ -419,81 +468,134 @@ pub async fn connect() -> Result<CloudStatus, String> {
         email,
         folder_id: None,
     };
-    write_json(OAUTH_KEY, &store).map_err(|e| e.to_string())?;
-    cache_oauth(store);
-    status()
+    SystemOAuthCredentialStore
+        .write_oauth(&store)
+        .map_err(|e| e.to_string())?;
+    status().await
 }
 async fn access_token() -> Result<(OAuthStore, String), CloudError> {
-    let mut store = load_oauth()?;
-    let secret = client_secret()?;
-    if store.expires_at > now() + 60 {
-        return Ok((store.clone(), store.access_token));
-    }
-    let response = Client::new()
+    let credentials = SystemOAuthCredentialStore;
+    let store = credentials.read_oauth()?;
+    refresh_oauth_if_needed(&credentials, store, now(), refresh_token_remote).await
+}
+
+async fn refresh_token_remote(store: OAuthStore) -> Result<TokenResponse, CloudError> {
+    let response = Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| CloudError::TokenRefresh("Google token client is unavailable".into()))?
         .post(TOKEN_ENDPOINT)
         .form(&[
             ("client_id", client_id()?),
-            ("client_secret", secret),
+            ("client_secret", client_secret()?),
             ("refresh_token", store.refresh_token.as_str()),
             ("grant_type", "refresh_token"),
         ])
         .send()
         .await
-        .map_err(|e| CloudError::NetworkUnavailable(e.to_string()))?;
+        .map_err(|_| {
+            CloudError::NetworkUnavailable(
+                "Google could not be reached to refresh the saved connection".into(),
+            )
+        })?;
     let status = response.status();
+    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+        return Err(CloudError::NetworkUnavailable(
+            "Google could not refresh the saved connection right now".into(),
+        ));
+    }
     let token: TokenResponse = response
         .json()
         .await
         .map_err(|_| CloudError::TokenRefresh("Google token response was invalid".into()))?;
     if !status.is_success() {
-        return Err(CloudError::TokenRefresh(
-            token
-                .error_description
-                .or(token.error)
-                .unwrap_or_else(|| "Google authorization has expired or been revoked".into()),
-        ));
+        return Err(refresh_response_error(status, token.error.as_deref()));
     }
-    store.access_token = token
-        .access_token
-        .ok_or_else(|| CloudError::TokenRefresh("refreshed access token was missing".into()))?;
-    store.expires_at = now() + token.expires_in.unwrap_or(3600);
-    write_json(OAUTH_KEY, &store)?;
-    cache_oauth(store.clone());
-    Ok((store.clone(), store.access_token))
+    Ok(token)
 }
-pub fn status() -> Result<CloudStatus, String> {
-    let state = load_state();
-    match load_oauth() {
-        Ok(store) => Ok(CloudStatus {
-            connected: true,
-            account_email: Some(store.email),
-            automatic_enabled: state.automatic_enabled,
-            status: if state.last_error.is_some() {
+
+fn refresh_response_error(status: StatusCode, oauth_error: Option<&str>) -> CloudError {
+    if oauth_error == Some("invalid_grant") {
+        CloudError::AuthorizationRequired(
+            "Google authorization expired or was revoked; reconnect Google Drive".into(),
+        )
+    } else if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+        CloudError::NetworkUnavailable(
+            "Google could not refresh the saved connection right now".into(),
+        )
+    } else {
+        CloudError::TokenRefresh(
+            "Google could not refresh the saved connection; reconnect may be required".into(),
+        )
+    }
+}
+async fn cloud_status_from<S, F, Fut>(
+    credentials: &S,
+    state: CloudState,
+    now: i64,
+    refresh: F,
+) -> CloudStatus
+where
+    S: OAuthCredentialStore,
+    F: FnOnce(OAuthStore) -> Fut,
+    Fut: Future<Output = Result<TokenResponse, CloudError>>,
+{
+    let base = |connected, account_email, status: &str| CloudStatus {
+        connected,
+        account_email,
+        automatic_enabled: state.automatic_enabled,
+        status: status.into(),
+        last_success: state.last_success,
+        pending: state.pending.len(),
+    };
+
+    let store = match credentials.read_oauth() {
+        Ok(store) => store,
+        Err(CloudError::NotConnected(_)) => return base(false, None, "disconnected"),
+        Err(CloudError::CredentialStoreUnavailable(_)) => {
+            return base(false, None, "credential_store_unavailable");
+        }
+        Err(_) => return base(false, None, "needs_attention"),
+    };
+    let email = store.email.clone();
+    match refresh_oauth_if_needed(credentials, store, now, refresh).await {
+        Ok((store, _)) => base(
+            true,
+            Some(store.email),
+            if state.last_error.is_some() {
                 "needs_attention"
             } else if !state.pending.is_empty() {
                 "pending"
             } else {
                 "up_to_date"
-            }
-            .into(),
-            last_success: state.last_success,
-            pending: state.pending.len(),
-        }),
-        Err(_) => Ok(CloudStatus {
-            connected: false,
-            account_email: None,
-            automatic_enabled: state.automatic_enabled,
-            status: "disconnected".into(),
-            last_success: state.last_success,
-            pending: state.pending.len(),
-        }),
+            },
+        ),
+        Err(CloudError::NetworkUnavailable(_)) | Err(CloudError::RateLimited(_)) => {
+            base(true, Some(email), "drive_unavailable")
+        }
+        Err(CloudError::AuthorizationRequired(_)) => base(false, None, "authorization_required"),
+        Err(CloudError::CredentialStoreUnavailable(_)) => {
+            base(false, None, "credential_store_unavailable")
+        }
+        Err(_) => base(false, None, "needs_attention"),
     }
 }
-pub fn set_automatic(enabled: bool) -> Result<CloudStatus, String> {
+
+pub async fn status() -> Result<CloudStatus, String> {
+    Ok(cloud_status_from(
+        &SystemOAuthCredentialStore,
+        load_state(),
+        now(),
+        |store| async move { refresh_token_remote(store).await },
+    )
+    .await)
+}
+pub async fn set_automatic(enabled: bool) -> Result<CloudStatus, String> {
     let mut state = load_state();
     state.automatic_enabled = enabled;
     save_state(&state);
-    status()
+    status().await
 }
 pub async fn disconnect() -> Result<(), String> {
     if let Ok(store) = load_oauth() {
@@ -511,14 +613,13 @@ pub async fn disconnect() -> Result<(), String> {
         e.delete_credential()
             .map_err(|x| CloudError::TokenRefresh(x.to_string()))
     });
-    clear_oauth_cache();
     Ok(())
 }
 async fn api_error(status: StatusCode) -> CloudError {
     match status {
-        StatusCode::UNAUTHORIZED => {
-            CloudError::TokenRefresh("Google authorization has expired or been revoked".into())
-        }
+        StatusCode::UNAUTHORIZED => CloudError::AuthorizationRequired(
+            "Google authorization expired or was revoked; reconnect Google Drive".into(),
+        ),
         StatusCode::FORBIDDEN => {
             CloudError::PermissionDenied("Google Drive denied this operation".into())
         }
@@ -621,6 +722,11 @@ pub async fn list() -> Result<Vec<RemoteBackup>, String> {
         .files
         .unwrap_or_default()
         .into_iter()
+        .filter(|f| {
+            f.name
+                .as_deref()
+                .is_some_and(|name| is_backup_artifact(name, f.app_properties.as_ref()))
+        })
         .filter_map(|f| {
             Some(RemoteBackup {
                 remote_id: f.id?,
@@ -637,6 +743,7 @@ pub async fn list() -> Result<Vec<RemoteBackup>, String> {
         })
         .collect())
 }
+
 pub async fn upload_backup_file(path: &Path) -> Result<RemoteBackup, CloudError> {
     let (mut store, token) = access_token().await?;
     let folder = folder_id(&mut store, &token).await?;
@@ -828,6 +935,50 @@ pub async fn record_upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    #[derive(Clone, Default)]
+    struct MemoryOAuthCredentialStore {
+        serialized: Arc<Mutex<Option<String>>>,
+        fail_reads: bool,
+    }
+
+    impl OAuthCredentialStore for MemoryOAuthCredentialStore {
+        fn read_oauth(&self) -> Result<OAuthStore, CloudError> {
+            if self.fail_reads {
+                return Err(CloudError::CredentialStoreUnavailable(
+                    "test credential store unavailable".into(),
+                ));
+            }
+            self.serialized
+                .lock()
+                .expect("test credential store lock")
+                .as_deref()
+                .ok_or_else(|| CloudError::NotConnected("no saved connection".into()))
+                .and_then(|value| {
+                    serde_json::from_str(value).map_err(|_| {
+                        CloudError::Reconciliation("saved OAuth data is invalid".into())
+                    })
+                })
+        }
+
+        fn write_oauth(&self, store: &OAuthStore) -> Result<(), CloudError> {
+            let serialized = serde_json::to_string(store)
+                .map_err(|_| CloudError::Reconciliation("OAuth serialization failed".into()))?;
+            *self.serialized.lock().expect("test credential store lock") = Some(serialized);
+            Ok(())
+        }
+    }
+
+    fn fake_oauth_store(expires_at: i64) -> OAuthStore {
+        OAuthStore {
+            access_token: "test-access-token".into(),
+            refresh_token: "test-refresh-token".into(),
+            expires_at,
+            email: "owner@example.test".into(),
+            folder_id: Some("test-folder-id".into()),
+        }
+    }
 
     #[test]
     fn pkce_uses_base64url_sha256() {
@@ -848,11 +999,198 @@ mod tests {
     }
 
     #[test]
+    fn recovery_envelopes_never_appear_as_restorable_backups() {
+        let mut props = std::collections::HashMap::new();
+        props.insert(
+            "ate05_object_type".to_string(),
+            "recovery_envelope".to_string(),
+        );
+        assert!(!is_backup_artifact(
+            "ATE05 Recovery.ate05backup",
+            Some(&props)
+        ));
+        assert!(is_backup_artifact("ATE05-1-id.ate05backup", None));
+        assert!(!is_backup_artifact("ATE05 Recovery Envelope.json", None));
+    }
+
+    #[test]
     fn cloud_errors_are_typed_and_do_not_include_tokens() {
         let error =
             CloudError::TokenRefresh("Google authorization has expired or been revoked".into());
         assert!(error.to_string().starts_with("token_refresh_failed:"));
         assert!(!error.to_string().contains("access_token"));
+    }
+
+    #[test]
+    fn missing_drive_login_is_distinct_from_a_locked_os_credential_store() {
+        assert!(matches!(
+            credential_read_error(keyring::Error::NoEntry),
+            CloudError::NotConnected(_)
+        ));
+        assert!(matches!(
+            credential_read_error(keyring::Error::NoStorageAccess(Box::new(
+                std::io::Error::other("locked")
+            ))),
+            CloudError::CredentialStoreUnavailable(_)
+        ));
+    }
+
+    #[test]
+    fn oauth_credentials_survive_a_simulated_process_store_reload() {
+        let first_process = MemoryOAuthCredentialStore::default();
+        first_process
+            .write_oauth(&fake_oauth_store(10_000))
+            .unwrap();
+        let restarted_process = MemoryOAuthCredentialStore {
+            serialized: first_process.serialized.clone(),
+            fail_reads: false,
+        };
+        let loaded = restarted_process.read_oauth().unwrap();
+        assert_eq!(loaded.email, "owner@example.test");
+        assert_eq!(loaded.refresh_token, "test-refresh-token");
+        assert_eq!(loaded.folder_id.as_deref(), Some("test-folder-id"));
+    }
+
+    #[test]
+    fn saved_refresh_token_restores_connected_status_after_reload() {
+        tauri::async_runtime::block_on(async {
+            let first_process = MemoryOAuthCredentialStore::default();
+            first_process
+                .write_oauth(&fake_oauth_store(10_000))
+                .unwrap();
+            let restarted_process = MemoryOAuthCredentialStore {
+                serialized: first_process.serialized.clone(),
+                fail_reads: false,
+            };
+            let status = cloud_status_from(
+                &restarted_process,
+                CloudState::default(),
+                1_000,
+                |_| async { panic!("valid access token should not refresh") },
+            )
+            .await;
+            assert!(status.connected);
+            assert_eq!(status.status, "up_to_date");
+        });
+    }
+
+    #[test]
+    fn expired_access_token_refreshes_and_persists_rotated_credentials() {
+        tauri::async_runtime::block_on(async {
+            let credentials = MemoryOAuthCredentialStore::default();
+            credentials.write_oauth(&fake_oauth_store(0)).unwrap();
+            let (updated, access_token) = refresh_oauth_if_needed(
+                &credentials,
+                credentials.read_oauth().unwrap(),
+                1_000,
+                |_| async {
+                    Ok(TokenResponse {
+                        access_token: Some("new-test-access-token".into()),
+                        refresh_token: Some("rotated-test-refresh-token".into()),
+                        expires_in: Some(3_600),
+                        error: None,
+                    })
+                },
+            )
+            .await
+            .unwrap();
+            let reloaded = MemoryOAuthCredentialStore {
+                serialized: credentials.serialized.clone(),
+                fail_reads: false,
+            }
+            .read_oauth()
+            .unwrap();
+            assert_eq!(access_token, "new-test-access-token");
+            assert_eq!(updated.refresh_token, "rotated-test-refresh-token");
+            assert_eq!(reloaded.access_token, "new-test-access-token");
+            assert_eq!(reloaded.refresh_token, "rotated-test-refresh-token");
+            assert_eq!(reloaded.expires_at, 4_600);
+        });
+    }
+
+    #[test]
+    fn temporary_refresh_network_failure_keeps_saved_credentials_and_connected_state() {
+        tauri::async_runtime::block_on(async {
+            let credentials = MemoryOAuthCredentialStore::default();
+            credentials.write_oauth(&fake_oauth_store(0)).unwrap();
+            let before = credentials.read_oauth().unwrap();
+            let status = cloud_status_from(&credentials, CloudState::default(), 1_000, |_| async {
+                Err(CloudError::NetworkUnavailable(
+                    "temporary offline test".into(),
+                ))
+            })
+            .await;
+            let after = credentials.read_oauth().unwrap();
+            assert!(status.connected);
+            assert_eq!(status.status, "drive_unavailable");
+            assert_eq!(after.access_token, before.access_token);
+            assert_eq!(after.refresh_token, before.refresh_token);
+        });
+    }
+
+    #[test]
+    fn missing_credentials_and_credential_store_failure_have_distinct_statuses() {
+        tauri::async_runtime::block_on(async {
+            let missing = cloud_status_from(
+                &MemoryOAuthCredentialStore::default(),
+                CloudState::default(),
+                1_000,
+                |_| async { panic!("missing credentials should not refresh") },
+            )
+            .await;
+            assert!(!missing.connected);
+            assert_eq!(missing.status, "disconnected");
+
+            let inaccessible = MemoryOAuthCredentialStore {
+                serialized: Arc::default(),
+                fail_reads: true,
+            };
+            let failed =
+                cloud_status_from(&inaccessible, CloudState::default(), 1_000, |_| async {
+                    panic!("unavailable store should not refresh")
+                })
+                .await;
+            assert!(!failed.connected);
+            assert_eq!(failed.status, "credential_store_unavailable");
+        });
+    }
+
+    #[test]
+    fn revoked_refresh_credentials_require_reconnect_without_deleting_them() {
+        tauri::async_runtime::block_on(async {
+            let credentials = MemoryOAuthCredentialStore::default();
+            credentials.write_oauth(&fake_oauth_store(0)).unwrap();
+            let status = cloud_status_from(&credentials, CloudState::default(), 1_000, |_| async {
+                Err(CloudError::AuthorizationRequired(
+                    "safe reconnect message".into(),
+                ))
+            })
+            .await;
+            assert!(!status.connected);
+            assert_eq!(status.status, "authorization_required");
+            assert_eq!(
+                credentials.read_oauth().unwrap().refresh_token,
+                "test-refresh-token"
+            );
+        });
+        assert!(matches!(
+            refresh_response_error(StatusCode::BAD_REQUEST, Some("invalid_grant")),
+            CloudError::AuthorizationRequired(_)
+        ));
+        assert!(matches!(
+            refresh_response_error(StatusCode::SERVICE_UNAVAILABLE, Some("server_error")),
+            CloudError::NetworkUnavailable(_)
+        ));
+    }
+
+    #[test]
+    fn oauth_errors_never_include_token_or_provider_description_values() {
+        let error = CloudError::CredentialStoreUnavailable("credential store unavailable".into());
+        let rendered = error.to_string();
+        assert!(!rendered.contains("test-access-token"));
+        assert!(!rendered.contains("test-refresh-token"));
+        assert!(!rendered.contains("client_secret"));
+        assert!(!rendered.contains("authorization_code"));
     }
 
     #[test]

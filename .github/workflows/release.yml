@@ -77,6 +77,8 @@ jobs:
 
             Start by setting the owner PIN, choose an editable starter menu if useful, add initial tables, and configure printers later in Settings. Keep an exported backup on separate storage.
 
+            Cloud backups created by this release are not encrypted by ATE05. Anyone with access to the Google account or a downloaded backup file may be able to read its restaurant data. Keep the Google account secure and protect exported backup files.
+
             macOS and Windows artifacts require platform security approval until production signing credentials are configured.
           releaseDraft: false
           prerelease: false
