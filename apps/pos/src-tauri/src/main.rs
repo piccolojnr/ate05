@@ -12,15 +12,8 @@ mod backup;
 mod database;
 mod device;
 mod drive;
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PrinterRequest {
-    connection_type: String,
-    address: String,
-    port: Option<u16>,
-    paper_width: u16,
-    cutter_enabled: bool,
-}
+mod printing;
+use printing::PrinterRequest;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -234,16 +227,29 @@ async fn print_receipt(request: PrinterRequest, receipt: ReceiptRequest) -> Resu
         &receipt_text(&receipt, request.paper_width),
         request.cutter_enabled,
     );
-    tauri::async_runtime::spawn_blocking(move || send_tcp(&request, &bytes))
+    tauri::async_runtime::spawn_blocking(move || send_print(&request, &bytes))
         .await
         .map_err(|error| format!("print worker failed: {error}"))??;
     Ok(())
 }
 
-fn send_tcp(request: &PrinterRequest, bytes: &[u8]) -> Result<(), String> {
-    if request.connection_type != "network" {
-        return Err("unsupported_transport: USB printing is not enabled in V1".into());
+fn send_print(request: &PrinterRequest, bytes: &[u8]) -> Result<(), String> {
+    match printing::transport(request)? {
+        printing::Transport::Network => send_tcp(request, bytes),
+        printing::Transport::System => {
+            printing::send_system(request.queue_name.as_deref().unwrap(), bytes)
+        }
     }
+}
+
+#[tauri::command]
+async fn list_printer_queues() -> Result<Vec<printing::PrinterQueue>, String> {
+    tauri::async_runtime::spawn_blocking(printing::list_queues)
+        .await
+        .map_err(|_| "spooler_error: queue discovery worker failed".to_string())?
+}
+
+fn send_tcp(request: &PrinterRequest, bytes: &[u8]) -> Result<(), String> {
     let port = request
         .port
         .ok_or_else(|| "invalid_configuration: network printer port is required".to_string())?;
@@ -290,7 +296,7 @@ async fn print_kitchen_ticket(
         &ticket_text(&ticket, request.paper_width),
         request.cutter_enabled,
     );
-    tauri::async_runtime::spawn_blocking(move || send_tcp(&request, &bytes))
+    tauri::async_runtime::spawn_blocking(move || send_print(&request, &bytes))
         .await
         .map_err(|error| format!("write_failed: {}", error))??;
     Ok(())
@@ -316,7 +322,7 @@ async fn test_printer(request: PrinterRequest, created_at: String) -> Result<(),
         &ticket_text(&ticket, request.paper_width),
         request.cutter_enabled,
     );
-    tauri::async_runtime::spawn_blocking(move || send_tcp(&request, &bytes))
+    tauri::async_runtime::spawn_blocking(move || send_print(&request, &bytes))
         .await
         .map_err(|error| format!("write_failed: {}", error))??;
     Ok(())
@@ -376,6 +382,12 @@ fn main() {
                             sql: include_str!(
                                 "../../../../packages/database/drizzle/0005_menu_price_options.sql"
                             ),
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 7,
+                            description: "system_printer_queues",
+                            sql: include_str!("../../../../packages/database/drizzle/0006_system_printer_queues.sql"),
                             kind: MigrationKind::Up,
                         },
                     ],
@@ -451,6 +463,7 @@ fn main() {
             print_kitchen_ticket,
             print_receipt,
             test_printer,
+            list_printer_queues,
             list_backups,
             verify_backup,
             delete_backup,
@@ -672,6 +685,49 @@ async fn restore_cloud_backup(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_dispatch_sends_the_original_escpos_bytes() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let reader = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut received = Vec::new();
+            stream.read_to_end(&mut received).unwrap();
+            received
+        });
+        let request = PrinterRequest {
+            connection_type: "network".into(),
+            address: "127.0.0.1".into(),
+            port: Some(port),
+            queue_name: None,
+            paper_width: 58,
+            cutter_enabled: true,
+        };
+        let bytes = escpos("Receipt test", true);
+        send_print(&request, &bytes).unwrap();
+        assert_eq!(reader.join().unwrap(), bytes);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn system_dispatch_returns_platform_error_without_using_tcp() {
+        let request = PrinterRequest {
+            connection_type: "system".into(),
+            address: String::new(),
+            port: None,
+            queue_name: Some("Generic / Text Only".into()),
+            paper_width: 80,
+            cutter_enabled: true,
+        };
+        assert!(send_print(&request, &escpos("Test", true))
+            .unwrap_err()
+            .starts_with("unsupported_platform:"));
+    }
 
     #[test]
     fn normalizes_transport_failures_without_exposing_unbounded_details() {

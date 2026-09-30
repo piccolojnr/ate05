@@ -212,11 +212,16 @@ test("operator can configure independent kitchen and receipt printers", async ({
   await page.reload();
   await signIn(page);
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Settings" }).first(),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Printers/ }).click();
   await expect(page.getByText("Not configured").first()).toBeVisible();
 
   await page.getByRole("button", { name: "Add printer" }).first().click();
-  await page.getByRole("button", { name: "Enter manually" }).click();
+  await page
+    .getByRole("button", { name: "Network printer", exact: true })
+    .click();
   await page.getByLabel("Friendly name").fill("Kitchen TCP");
   await page.getByLabel("Address or device name").fill("kitchen.local");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -232,7 +237,9 @@ test("operator can configure independent kitchen and receipt printers", async ({
 
   await page.getByRole("button", { name: "Save & finish" }).click();
   await page.getByRole("button", { name: "Add printer" }).first().click();
-  await page.getByRole("button", { name: "Enter manually" }).click();
+  await page
+    .getByRole("button", { name: "Network printer", exact: true })
+    .click();
   await page.getByLabel("Friendly name").fill("Receipt TCP");
   await page.getByLabel("Address or device name").fill("receipt.local");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -244,6 +251,7 @@ test("operator can configure independent kitchen and receipt printers", async ({
   await page.reload();
   await signIn(page);
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: /Printers/ }).click();
   await expect(page.getByText("Kitchen TCP")).toBeVisible();
   await expect(page.getByText("Receipt TCP")).toBeVisible();
 });

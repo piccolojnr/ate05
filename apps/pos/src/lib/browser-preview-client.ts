@@ -1,3 +1,4 @@
+import { validatePrinterInput } from "./printer-configuration";
 import type {
   KitchenTicket,
   InventoryItem,
@@ -1036,6 +1037,7 @@ export function createBrowserPreviewClient(): PosClient {
     },
     async savePrinter(input) {
       requirePermission("printers");
+      validatePrinterInput(input);
       const state = readState();
       const printer: PosPrinterConfig = {
         id: input.id ?? crypto.randomUUID(),
@@ -1044,6 +1046,7 @@ export function createBrowserPreviewClient(): PosClient {
         role: input.role ?? "kitchen",
         connectionType: input.connectionType,
         address: input.address.trim(),
+        queueName: input.queueName ?? null,
         port: input.port,
         paperWidth: input.paperWidth as PaperWidth,
         cutterEnabled: input.cutterEnabled,

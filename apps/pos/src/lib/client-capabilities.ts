@@ -64,8 +64,9 @@ export interface PrinterInput {
   id?: string;
   role?: "kitchen" | "receipt";
   name: string;
-  connectionType: "network" | "usb";
+  connectionType: PosPrinterConfig["connectionType"];
   address: string;
+  queueName?: string | null;
   port: number | null;
   paperWidth: PaperWidth;
   cutterEnabled: boolean;

@@ -1,8 +1,17 @@
 export type PrintDocumentKind = "receipt" | "kitchen-ticket" | "test";
 
 export type PrinterRole = "kitchen" | "receipt";
-export type PrinterConnectionType = "network" | "usb";
+export type PrinterConnectionType = "network" | "usb" | "system";
 export type PaperWidth = 58 | 80;
+
+/** Installed Windows queue metadata returned by list_printer_queues. */
+export interface PrinterQueue {
+  name: string;
+  driverName: string;
+  portName: string;
+  status: number;
+  jobs: number;
+}
 
 export interface PrinterConfig {
   id: string;
@@ -11,6 +20,7 @@ export interface PrinterConfig {
   role: PrinterRole;
   connectionType: PrinterConnectionType;
   address: string;
+  queueName?: string | null;
   port: number | null;
   paperWidth: PaperWidth;
   cutterEnabled: boolean;

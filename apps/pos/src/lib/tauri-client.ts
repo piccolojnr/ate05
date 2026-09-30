@@ -1,5 +1,9 @@
 import Database from "@tauri-apps/plugin-sql";
 import { serializeClient } from "./serialize-client";
+import {
+  nativePrinterRequest,
+  validatePrinterInput,
+} from "./printer-configuration";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
@@ -523,8 +527,11 @@ function mapPrinter(row: Row): PosPrinterConfig {
     businessId: asString(row.businessId),
     name: asString(row.name),
     role: asString(row.role) as "kitchen" | "receipt",
-    connectionType: asString(row.connectionType) as "network" | "usb",
+    connectionType: asString(
+      row.connectionType,
+    ) as PosPrinterConfig["connectionType"],
     address: asString(row.address),
+    queueName: asNullableString(row.queueName),
     port:
       row.port === null || row.port === undefined ? null : asNumber(row.port),
     paperWidth: asNumber(row.paperWidth) as PaperWidth,
@@ -538,7 +545,7 @@ async function getActiveKitchenPrinter(
 ): Promise<PosPrinterConfig | null> {
   const [row] = await select<Row>(
     db,
-    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'kitchen' ORDER BY active DESC, created_at LIMIT 1",
+    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, queue_name AS queueName, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'kitchen' ORDER BY active DESC, created_at LIMIT 1",
     [businessId],
   );
   return row ? mapPrinter(row) : null;
@@ -549,7 +556,7 @@ async function getActiveReceiptPrinter(
 ): Promise<PosPrinterConfig | null> {
   const [row] = await select<Row>(
     db,
-    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'receipt' ORDER BY active DESC, updated_at DESC LIMIT 1",
+    "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, queue_name AS queueName, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 AND role = 'receipt' ORDER BY active DESC, updated_at DESC LIMIT 1",
     [businessId],
   );
   return row ? mapPrinter(row) : null;
@@ -623,17 +630,19 @@ function normalizePrintFailure(cause: unknown): {
       category: "unsupported_transport",
       message: "This printer connection is not supported.",
     };
+  if (normalized.includes("unsupported_platform"))
+    return {
+      category: "unsupported_platform",
+      message: "Installed printer queues require Windows.",
+    };
+  if (normalized.includes("queue_not_found"))
+    return {
+      category: "queue_not_found",
+      message: "Installed printer queue not found. Refresh printer setup.",
+    };
+  if (normalized.includes("spooler_error"))
+    return { category: "spooler_error", message: detail.slice(0, 200) };
   return { category: "write_failed", message: "Printer unavailable." };
-}
-
-function nativePrinterRequest(printer: PosPrinterConfig) {
-  return {
-    connectionType: printer.connectionType,
-    address: printer.address,
-    port: printer.port,
-    paperWidth: printer.paperWidth,
-    cutterEnabled: printer.cutterEnabled,
-  };
 }
 
 async function attemptKitchenPrint(
@@ -1975,37 +1984,20 @@ export function createTauriClient(): PosClient {
       const db = await database();
       const rows = await select<Row>(
         db,
-        "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 ORDER BY role, name",
+        "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, queue_name AS queueName, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE business_id = $1 ORDER BY role, name",
         [businessId],
       );
       return rows.map(mapPrinter);
     },
     async savePrinter(input) {
       requirePermission("printers");
-      if (!input.name.trim() || !input.address.trim())
-        throw new PosClientError(
-          "validation",
-          "Printer name and address are required.",
-        );
-      if (
-        input.connectionType === "network" &&
-        (!input.port || input.port < 1 || input.port > 65535)
-      )
-        throw new PosClientError(
-          "validation",
-          "A network printer needs a valid port.",
-        );
-      if (input.paperWidth !== 58 && input.paperWidth !== 80)
-        throw new PosClientError(
-          "validation",
-          "Paper width must be 58mm or 80mm.",
-        );
+      validatePrinterInput(input);
       const db = await database();
       const id = input.id ?? crypto.randomUUID();
       const now = timestamp();
       await execute(
         db,
-        "INSERT INTO printers (id, business_id, name, role, connection_type, address, port, paper_width, cutter_enabled, active, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11) ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, connection_type = excluded.connection_type, address = excluded.address, port = excluded.port, paper_width = excluded.paper_width, cutter_enabled = excluded.cutter_enabled, active = excluded.active, updated_at = excluded.updated_at WHERE printers.business_id = excluded.business_id",
+        "INSERT INTO printers (id, business_id, name, role, connection_type, address, port, paper_width, cutter_enabled, active, created_at, updated_at, queue_name) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12) ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, connection_type = excluded.connection_type, address = excluded.address, queue_name = excluded.queue_name, port = excluded.port, paper_width = excluded.paper_width, cutter_enabled = excluded.cutter_enabled, active = excluded.active, updated_at = excluded.updated_at WHERE printers.business_id = excluded.business_id",
         [
           id,
           businessId,
@@ -2018,6 +2010,7 @@ export function createTauriClient(): PosClient {
           input.cutterEnabled ? 1 : 0,
           input.active ? 1 : 0,
           now,
+          input.connectionType === "system" ? input.queueName : null,
         ],
       );
       const printers = await this.listPrinters();
@@ -2030,7 +2023,7 @@ export function createTauriClient(): PosClient {
       const db = await database();
       const [row] = await select<Row>(
         db,
-        "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE id = $1 AND business_id = $2",
+        "SELECT id, business_id AS businessId, name, role, connection_type AS connectionType, address, queue_name AS queueName, port, paper_width AS paperWidth, cutter_enabled AS cutterEnabled, active FROM printers WHERE id = $1 AND business_id = $2",
         [printerId, businessId],
       );
       if (!row) throw new PosClientError("not_found", "Printer not found.");

@@ -19,6 +19,7 @@ export const printers = sqliteTable(
     role: text("role").notNull(),
     connectionType: text("connection_type").notNull(),
     address: text("address").notNull(),
+    queueName: text("queue_name"),
     port: integer("port"),
     paperWidth: integer("paper_width").notNull().default(80),
     cutterEnabled: integer("cutter_enabled", { mode: "boolean" })
@@ -33,7 +34,11 @@ export const printers = sqliteTable(
     check("printers_role_check", sql`${table.role} in ('kitchen', 'receipt')`),
     check(
       "printers_connection_type_check",
-      sql`${table.connectionType} in ('network', 'usb')`,
+      sql`${table.connectionType} in ('network', 'usb', 'system')`,
+    ),
+    check(
+      "printers_system_queue_check",
+      sql`${table.connectionType} != 'system' or (${table.queueName} is not null and length(trim(${table.queueName})) > 0 and ${table.address} = '' and ${table.port} is null)`,
     ),
     check("printers_paper_width_check", sql`${table.paperWidth} in (58, 80)`),
     check(

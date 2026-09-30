@@ -90,6 +90,16 @@ impl MigrationSource<'static> for Ate05Migrations {
                     .into(),
                     false,
                 ),
+                Migration::new(
+                    7,
+                    "system_printer_queues".into(),
+                    MigrationType::ReversibleUp,
+                    include_str!(
+                        "../../../../packages/database/drizzle/0006_system_printer_queues.sql"
+                    )
+                    .into(),
+                    false,
+                ),
             ])
         })
     }
@@ -157,6 +167,101 @@ mod tests {
         previous.run_direct(&mut connection).await.unwrap();
         connection.close().await.unwrap();
         connect(path).await.unwrap()
+    }
+
+    #[test]
+    fn system_queue_migration_preserves_legacy_configuration_and_history_links() {
+        tauri::async_runtime::block_on(async {
+            let pool = connect(Path::new(":memory:")).await.unwrap();
+            let migrations = Ate05Migrations.resolve().await.unwrap();
+            Migrator::new(PreviousMigrations(migrations.into_iter().take(6).collect()))
+                .await
+                .unwrap()
+                .run(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO businesses VALUES ('b', 'Cafe', 1, 'created', 'updated')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO printers VALUES ('lan', 'b', 'Receipt', 'receipt', 'network', 'printer.local', 9100, 58, 0, 1, 'created', 'updated'), ('usb', 'b', 'Kitchen', 'kitchen', 'usb', 'legacy-device', NULL, 80, 1, 0, 'created', 'updated')")
+                .execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO print_attempts VALUES ('attempt', 'b', 'test', 'test-document', 'lan', 'test', 'created', 1, NULL, NULL)")
+                .execute(&pool).await.unwrap();
+            let query = "SELECT id, connection_type, address, port, paper_width, cutter_enabled, active, created_at, updated_at FROM printers ORDER BY id";
+            type LegacyConfig = (
+                String,
+                String,
+                String,
+                Option<i64>,
+                i64,
+                i64,
+                i64,
+                String,
+                String,
+            );
+            let before = sqlx::query_as::<_, LegacyConfig>(query)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+            Migrator::new(Ate05Migrations)
+                .await
+                .unwrap()
+                .run(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                before,
+                sqlx::query_as::<_, LegacyConfig>(query)
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT printer_id FROM print_attempts WHERE id = 'attempt'"
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+                "lan"
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM printers WHERE queue_name IS NULL"
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+                2
+            );
+            sqlx::query("INSERT INTO printers (id, business_id, name, role, connection_type, address, queue_name, created_at, updated_at) VALUES ('system', 'b', 'Windows receipt', 'receipt', 'system', '', 'Generic / Text Only', 'created', 'updated')")
+                .execute(&pool).await.unwrap();
+            assert!(
+                sqlx::query("UPDATE printers SET queue_name = NULL WHERE id = 'system'")
+                    .execute(&pool)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                sqlx::query("UPDATE printers SET address = 'USB001' WHERE id = 'system'")
+                    .execute(&pool)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                sqlx::query("UPDATE printers SET port = 9100 WHERE id = 'system'")
+                    .execute(&pool)
+                    .await
+                    .is_err()
+            );
+            assert!(sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty());
+            pool.close().await;
+        });
     }
 
     #[test]
@@ -282,7 +387,7 @@ mod tests {
                 .fetch_one(&migrated)
                 .await
                 .unwrap();
-            assert_eq!(version, 6);
+            assert_eq!(version, 7);
             assert_eq!(
                 sqlx::query_scalar::<_, String>(
                     "SELECT pricing_mode FROM menu_items WHERE id = 'migration-item'"

@@ -13,7 +13,7 @@ async function signIn(page: import("@playwright/test").Page) {
 
 test("printer settings offer a guided setup and explicit preview limitation", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.goto("/");
   await signIn(page);
   await page.setViewportSize({ width: 1024, height: 768 });
@@ -21,7 +21,7 @@ test("printer settings offer a guided setup and explicit preview limitation", as
   await page.getByRole("button", { name: /Printers/ }).click();
   await expect(page.getByText("Printers and devices")).toBeVisible();
   await page.screenshot({
-    path: "docs/artifacts/settings-printers-empty-1024.png",
+    path: testInfo.outputPath("settings-printers-empty-1024.png"),
     fullPage: true,
   });
   await page
@@ -32,12 +32,13 @@ test("printer settings offer a guided setup and explicit preview limitation", as
   await expect(
     page.getByText(/Browser preview cannot inspect hardware/),
   ).toBeVisible();
-  await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({
-    path: "docs/artifacts/settings-printer-discover-1440.png",
+    path: testInfo.outputPath("settings-printer-connection-1024.png"),
     fullPage: true,
   });
-  await page.getByRole("button", { name: "Continue to manual setup" }).click();
+  await page
+    .getByRole("button", { name: "Network printer", exact: true })
+    .click();
   await page.getByLabel("Friendly name").fill("Preview receipt printer");
   await page.getByLabel("Address or device name").fill("preview.local");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -45,7 +46,7 @@ test("printer settings offer a guided setup and explicit preview limitation", as
   await page.getByLabel("Paper width", { exact: true }).selectOption("58");
   await expect(page.getByText("464 dots")).toBeVisible();
   await page.screenshot({
-    path: "docs/artifacts/settings-printer-58mm.png",
+    path: testInfo.outputPath("settings-printer-58mm.png"),
     fullPage: true,
   });
 });

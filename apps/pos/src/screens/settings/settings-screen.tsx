@@ -289,8 +289,9 @@ export function PrinterSettingsCard({
     id?: string;
     role: PrinterRole;
     name: string;
-    connectionType: "network";
+    connectionType: PosPrinterConfig["connectionType"];
     address: string;
+    queueName?: string | null;
     port: number | null;
     paperWidth: 58 | 80;
     cutterEnabled: boolean;
@@ -323,18 +324,25 @@ export function PrinterSettingsCard({
     event.preventDefault();
     setError("");
     const parsedPort = Number(port);
-    if (!name.trim() || !address.trim())
+    if (
+      !name.trim() ||
+      (printer?.connectionType !== "system" && !address.trim())
+    )
       return setError("Enter a printer name and address.");
-    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535)
+    if (
+      (!printer || printer.connectionType === "network") &&
+      (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535)
+    )
       return setError("Port must be between 1 and 65535.");
     try {
       await onSave({
         id: printer?.id,
         role,
         name,
-        connectionType: "network",
-        address,
-        port: parsedPort,
+        connectionType: printer?.connectionType ?? "network",
+        address: printer?.connectionType === "system" ? "" : address,
+        queueName: printer?.queueName ?? null,
+        port: printer?.connectionType === "system" ? null : parsedPort,
         paperWidth,
         cutterEnabled,
         active,
@@ -408,11 +416,18 @@ export function PrinterSettingsCard({
             />
           </label>
           <label className="text-sm font-semibold">
-            Printer address
+            {printer?.connectionType === "system"
+              ? "Windows queue"
+              : "Printer address"}
             <Input
               aria-label={`${title} address`}
               className="mt-1"
-              value={address}
+              value={
+                printer?.connectionType === "system"
+                  ? (printer.queueName ?? "")
+                  : address
+              }
+              disabled={printer?.connectionType === "system"}
               onChange={(event) => setAddress(event.target.value)}
               placeholder="192.168.1.100 or printer.local"
             />
@@ -421,6 +436,7 @@ export function PrinterSettingsCard({
             Port
             <Input
               aria-label={`${title} port`}
+              disabled={printer?.connectionType === "system"}
               className="mt-1"
               type="number"
               min="1"
@@ -541,8 +557,16 @@ function PrinterOverviewCard({
             <dd className="font-semibold">{printer.paperWidth} mm</dd>
           </div>
           <div>
-            <dt className="text-muted-foreground">Address</dt>
-            <dd className="truncate font-semibold">{printer.address}</dd>
+            <dt className="text-muted-foreground">
+              {printer.connectionType === "system"
+                ? "Windows queue"
+                : "Address"}
+            </dt>
+            <dd className="truncate font-semibold">
+              {printer.connectionType === "system"
+                ? printer.queueName
+                : printer.address}
+            </dd>
           </div>
         </dl>
       ) : (
@@ -757,6 +781,7 @@ export function SettingsScreen({
           </div>
           {wizardPrinter !== undefined ? (
             <PrinterSetupWizard
+              key={wizardPrinter?.id ?? "new-printer"}
               printer={wizardPrinter ?? undefined}
               native={native}
               onSave={onSavePrinter}

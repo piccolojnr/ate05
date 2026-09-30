@@ -1,20 +1,16 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Badge, Button, Card, Checkbox, Input, Select } from "@ate05/ui";
-import { millimetresToDots, DEFAULT_PRINTER_DPI } from "@ate05/printing";
+import {
+  millimetresToDots,
+  DEFAULT_PRINTER_DPI,
+  type PrinterQueue,
+} from "@ate05/printing";
 import type { PosPrinterConfig } from "../../lib/pos-client";
+import type { PrinterInput } from "../../lib/client-capabilities";
 
 type PrinterRole = "kitchen" | "receipt";
-type SaveInput = {
-  id?: string;
-  role: PrinterRole;
-  name: string;
-  connectionType: "network";
-  address: string;
-  port: number | null;
-  paperWidth: 58 | 80;
-  cutterEnabled: boolean;
-  active: boolean;
-};
+type SaveInput = PrinterInput & { role: PrinterRole };
 
 export function PrinterSetupWizard({
   printer,
@@ -29,9 +25,20 @@ export function PrinterSetupWizard({
   onTest: (id: string) => Promise<void>;
   onClose: () => void;
 }) {
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(printer ? 1 : 0);
   const [name, setName] = useState(printer?.name ?? "");
+  const [customName, setCustomName] = useState(Boolean(printer?.name));
   const [address, setAddress] = useState(printer?.address ?? "");
+  const [connectionType, setConnectionType] = useState<
+    PosPrinterConfig["connectionType"]
+  >(printer?.connectionType ?? "network");
+  const [queueName, setQueueName] = useState(printer?.queueName ?? "");
+  const [queues, setQueues] = useState<PrinterQueue[]>([]);
+  const [queueError, setQueueError] = useState("");
+  const [loadingQueues, setLoadingQueues] = useState(
+    native && printer?.connectionType === "system",
+  );
+  const [queueRefresh, setQueueRefresh] = useState(0);
   const [port, setPort] = useState(String(printer?.port ?? 9100));
   const [role, setRole] = useState<PrinterRole>(printer?.role ?? "receipt");
   const [paperWidth, setPaperWidth] = useState<58 | 80>(
@@ -40,31 +47,64 @@ export function PrinterSetupWizard({
   const [cutterEnabled, setCutterEnabled] = useState(
     printer?.cutterEnabled ?? true,
   );
+  const [active, setActive] = useState(printer?.active ?? true);
   const [saved, setSaved] = useState<PosPrinterConfig | null>(printer ?? null);
   const [testState, setTestState] = useState<
     "idle" | "testing" | "success" | "failed"
   >("idle");
   const [error, setError] = useState("");
+  useEffect(() => {
+    if (!native || connectionType !== "system") return;
+    let cancelled = false;
+    invoke<PrinterQueue[]>("list_printer_queues")
+      .then((result) => {
+        if (!cancelled) setQueues(result);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) setQueueError(String(cause));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingQueues(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [native, connectionType, queueRefresh]);
   const dots = useMemo(
     () => millimetresToDots(paperWidth, DEFAULT_PRINTER_DPI),
     [paperWidth],
   );
   const steps = [
-    "Discover",
+    "Connection",
     "Identify",
     "Purpose",
     "Paper profile",
     "Test & save",
   ];
 
-  function discover() {
+  const unsupportedQueues = queueError.includes("unsupported_platform:");
+  const selectedQueue = queues.find((queue) => queue.name === queueName);
+
+  function chooseConnection(type: PosPrinterConfig["connectionType"]) {
     setError("");
-    if (!native) {
-      setAddress("");
-      setStep(1);
-      return;
+    if (type !== connectionType) {
+      setConnectionType(type);
+      setQueues([]);
+      setLoadingQueues(native && type === "system");
+      setQueueError("");
     }
     setStep(1);
+  }
+
+  function selectQueue(value: string) {
+    setQueueName(value);
+    if (!customName || !name.trim()) setName(value);
+  }
+
+  function backTo(step: number) {
+    setStep(step);
+    setError("");
+    setTestState("idle");
   }
 
   function nextIdentity(event: FormEvent) {
@@ -72,30 +112,46 @@ export function PrinterSetupWizard({
     setError("");
     if (!name.trim())
       return setError("Give this printer a name so staff can recognize it.");
-    if (!address.trim())
+    if (
+      connectionType === "system" &&
+      (!native || loadingQueues || queueError || !selectedQueue)
+    )
+      return setError(
+        "Select a printer from the current Windows list. Refresh the list if needed.",
+      );
+    if (connectionType !== "system" && !address.trim())
       return setError("Enter the printer address or device name.");
     const parsedPort = Number(port);
-    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535)
+    if (
+      connectionType === "network" &&
+      (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535)
+    )
       return setError("Port must be between 1 and 65535.");
     setStep(2);
   }
 
   async function testAndSave() {
     setError("");
+    setTestState("testing");
     try {
       const config = await onSave({
         id: saved?.id,
         role,
         name: name.trim(),
-        connectionType: "network",
-        address: address.trim(),
-        port: Number(port),
+        connectionType,
+        address: connectionType === "system" ? "" : address.trim(),
+        queueName: connectionType === "system" ? queueName : null,
+        port:
+          connectionType === "network"
+            ? Number(port)
+            : connectionType === "usb"
+              ? (printer?.port ?? null)
+              : null,
         paperWidth,
         cutterEnabled,
-        active: true,
+        active,
       });
       setSaved(config);
-      setTestState("testing");
       await onTest(config.id);
       setTestState("success");
     } catch (cause) {
@@ -103,14 +159,16 @@ export function PrinterSetupWizard({
       setError(
         cause instanceof Error
           ? cause.message
-          : "The test print could not be completed.",
+          : typeof cause === "string"
+            ? cause
+            : "The test print could not be completed.",
       );
     }
   }
 
   return (
-    <Card className="border-primary/30 bg-card p-0 shadow-lg shadow-primary/5">
-      <div className="border-b bg-primary/[0.04] p-5">
+    <Card className="min-w-0 border-primary/30 bg-card p-0 shadow-lg shadow-primary/5">
+      <div className="border-b bg-primary/[0.04] p-4">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-primary">
@@ -142,86 +200,247 @@ export function PrinterSetupWizard({
           ))}
         </ol>
       </div>
-      <div className="p-5">
+      <div className="p-4">
         {step === 0 ? (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-xl border bg-muted/20 p-5">
-              <p className="text-lg font-black">Find a printer</p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {native
-                  ? "Use a known network printer, then confirm its identity."
-                  : "Browser preview cannot inspect hardware. You can still configure a deterministic simulated printer."}
+          <div className="space-y-3">
+            {!native ? (
+              <p className="text-sm text-muted-foreground">
+                Browser preview cannot inspect hardware. Setup and test printing
+                are simulated; no physical printer is contacted.
               </p>
-              <Button className="mt-5" type="button" onClick={discover}>
-                {native ? "Start discovery" : "Continue to manual setup"}
-              </Button>
-            </div>
-            <div className="rounded-xl border border-dashed p-5">
-              <p className="text-lg font-black">Enter manually</p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                For a network printer, you only need its name, address, and
-                port.
-              </p>
-              <Button
-                className="mt-5"
+            ) : null}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button
                 type="button"
-                variant="secondary"
-                onClick={() => setStep(1)}
+                aria-label="Network printer"
+                className="rounded-xl border p-4 text-left hover:bg-muted/40"
+                onClick={() => chooseConnection("network")}
               >
-                Enter manually
-              </Button>
+                <p className="font-black">Network printer</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Enter its network address and port.
+                </p>
+              </button>
+              {native ? (
+                <button
+                  type="button"
+                  aria-label="Printer installed on this PC"
+                  className="rounded-xl border p-4 text-left hover:bg-muted/40"
+                  onClick={() => chooseConnection("system")}
+                >
+                  <p className="font-black">Printer installed on this PC</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Choose a Windows printer queue, including installed USB or
+                    Bluetooth printers.
+                  </p>
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}
         {step === 1 ? (
           <form className="space-y-4" onSubmit={nextIdentity}>
-            <div>
-              <label className="text-sm font-bold" htmlFor="printer-name">
-                Friendly name
-              </label>
-              <Input
-                id="printer-name"
-                className="mt-1"
-                autoFocus
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Front counter receipt printer"
-              />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-sm font-bold" htmlFor="printer-name">
+                  Friendly name
+                </label>
+                <Input
+                  id="printer-name"
+                  className="mt-1"
+                  autoFocus
+                  value={name}
+                  onChange={(event) => {
+                    setName(event.target.value);
+                    setCustomName(Boolean(event.target.value.trim()));
+                  }}
+                  placeholder="Front counter receipt printer"
+                />
+              </div>
+              <div>
+                <label
+                  className="text-sm font-bold"
+                  htmlFor="printer-connection"
+                >
+                  Connection
+                </label>
+                <Select
+                  id="printer-connection"
+                  className="mt-1"
+                  value={connectionType}
+                  onChange={(event) =>
+                    chooseConnection(
+                      event.target.value as PosPrinterConfig["connectionType"],
+                    )
+                  }
+                >
+                  <option value="network">Network printer</option>
+                  {native || connectionType === "system" ? (
+                    <option value="system" disabled={!native}>
+                      Printer installed on this PC
+                    </option>
+                  ) : null}
+                  {printer?.connectionType === "usb" ? (
+                    <option value="usb">Direct USB (unsupported)</option>
+                  ) : null}
+                </Select>
+              </div>
             </div>
-            <div>
-              <label className="text-sm font-bold" htmlFor="printer-address">
-                Address or device name
-              </label>
-              <Input
-                id="printer-address"
-                className="mt-1"
-                value={address}
-                onChange={(event) => setAddress(event.target.value)}
-                placeholder="192.168.1.100 or printer.local"
-              />
-              <p className="mt-1 text-xs text-muted-foreground">
-                This stays on the local computer.
-              </p>
-            </div>
-            <div className="max-w-xs">
-              <label className="text-sm font-bold" htmlFor="printer-port">
-                Network port
-              </label>
-              <Input
-                id="printer-port"
-                className="mt-1"
-                type="number"
-                min="1"
-                max="65535"
-                value={port}
-                onChange={(event) => setPort(event.target.value)}
-              />
-            </div>
+            {connectionType === "system" ? (
+              <div className="space-y-2">
+                <label className="text-sm font-bold" htmlFor="printer-queue">
+                  Installed printer queue
+                </label>
+                <div className="flex min-w-0 flex-wrap gap-2">
+                  <Select
+                    id="printer-queue"
+                    className="min-w-0 flex-1 basis-64"
+                    value={queueName}
+                    disabled={!native || loadingQueues || Boolean(queueError)}
+                    onChange={(event) => selectQueue(event.target.value)}
+                  >
+                    <option value="">Select a printer queue</option>
+                    {queueName &&
+                    !queues.some((queue) => queue.name === queueName) ? (
+                      <option value={queueName}>
+                        {queueName} (saved queue; not in current list)
+                      </option>
+                    ) : null}
+                    {queues.map((queue) => (
+                      <option key={queue.name} value={queue.name}>
+                        {queue.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={!native || loadingQueues}
+                    onClick={() => {
+                      setQueues([]);
+                      setLoadingQueues(true);
+                      setQueueError("");
+                      setQueueRefresh((value) => value + 1);
+                    }}
+                  >
+                    Refresh list
+                  </Button>
+                </div>
+                {loadingQueues ? (
+                  <p role="status" className="text-sm">
+                    Loading printers installed on this PC…
+                  </p>
+                ) : null}
+                {!native ? (
+                  <p role="status" className="text-sm">
+                    Browser preview cannot list installed printers. Any preview
+                    test is simulated.
+                  </p>
+                ) : null}
+                {selectedQueue ? (
+                  <p className="break-words text-xs text-muted-foreground">
+                    {selectedQueue.driverName} · Windows port:{" "}
+                    {selectedQueue.portName} · {selectedQueue.jobs} queued jobs
+                    {selectedQueue.status
+                      ? ` · Windows status flags: ${selectedQueue.status}`
+                      : ""}
+                  </p>
+                ) : null}
+                {!loadingQueues && !queueError && queues.length === 0 ? (
+                  native ? (
+                    <div
+                      role="status"
+                      className="rounded-lg bg-muted/40 p-3 text-sm"
+                    >
+                      <p className="font-semibold">
+                        No printers installed on this PC were found.
+                      </p>
+                      <p className="mt-1">
+                        Connect or pair the printer in Windows. Install it under
+                        Settings → Bluetooth &amp; devices → Printers &amp;
+                        scanners, then print a Windows test page. Return to
+                        ATE05 and refresh the list.
+                      </p>
+                    </div>
+                  ) : null
+                ) : null}
+                {queueError ? (
+                  <p
+                    role="alert"
+                    className="break-words rounded-lg bg-muted/40 p-3 text-sm"
+                  >
+                    {unsupportedQueues
+                      ? "Printers installed on this PC are supported only in the Windows desktop app. Use a network printer on this platform."
+                      : `Could not load the Windows printer list. Check that the Windows Print Spooler is running, then refresh the list. ${queueError.slice(0, 200)}`}
+                  </p>
+                ) : null}
+                {!loadingQueues &&
+                !queueError &&
+                queueName &&
+                !selectedQueue &&
+                queues.length > 0 ? (
+                  <p role="alert" className="text-sm">
+                    The saved queue is not in the current Windows list. Select
+                    its new name or refresh after reconnecting it.
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label
+                    className="text-sm font-bold"
+                    htmlFor="printer-address"
+                  >
+                    {connectionType === "network"
+                      ? "Address or device name"
+                      : "USB device name"}
+                  </label>
+                  <Input
+                    id="printer-address"
+                    className="mt-1"
+                    value={address}
+                    onChange={(event) => setAddress(event.target.value)}
+                    placeholder="192.168.1.100 or printer.local"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    This stays on the local computer.
+                  </p>
+                </div>
+                {connectionType === "network" ? (
+                  <div className="max-w-xs">
+                    <label className="text-sm font-bold" htmlFor="printer-port">
+                      Network port
+                    </label>
+                    <Input
+                      id="printer-port"
+                      className="mt-1"
+                      type="number"
+                      min="1"
+                      max="65535"
+                      value={port}
+                      onChange={(event) => setPort(event.target.value)}
+                    />
+                  </div>
+                ) : null}
+              </>
+            )}
             <div className="flex justify-between">
-              <Button type="button" variant="ghost" onClick={() => setStep(0)}>
+              <Button type="button" variant="ghost" onClick={() => backTo(0)}>
                 Back
               </Button>
-              <Button type="submit">Continue</Button>
+              <Button
+                type="submit"
+                disabled={
+                  connectionType === "system" &&
+                  (!native ||
+                    loadingQueues ||
+                    Boolean(queueError) ||
+                    !selectedQueue)
+                }
+              >
+                Continue
+              </Button>
             </div>
           </form>
         ) : null}
@@ -258,7 +477,7 @@ export function PrinterSetupWizard({
               </button>
             </div>
             <div className="flex justify-between">
-              <Button type="button" variant="ghost" onClick={() => setStep(1)}>
+              <Button type="button" variant="ghost" onClick={() => backTo(1)}>
                 Back
               </Button>
               <Button type="button" onClick={() => setStep(3)}>
@@ -305,12 +524,20 @@ export function PrinterSetupWizard({
                 Cutter enabled
               </label>
             </div>
+            <label className="flex items-center gap-2 text-sm font-semibold">
+              <Checkbox
+                type="checkbox"
+                checked={active}
+                onChange={(event) => setActive(event.target.checked)}
+              />
+              Printer enabled
+            </label>
             <p className="text-xs text-muted-foreground">
               Dots = round((millimetres ÷ 25.4) × DPI). The dot value follows
               the selected printer profile.
             </p>
             <div className="flex justify-between">
-              <Button type="button" variant="ghost" onClick={() => setStep(2)}>
+              <Button type="button" variant="ghost" onClick={() => backTo(2)}>
                 Back
               </Button>
               <Button type="button" onClick={() => setStep(4)}>
@@ -323,16 +550,22 @@ export function PrinterSetupWizard({
           <div className="space-y-4">
             <div className="rounded-xl border bg-muted/20 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="font-black">{name || "Unnamed printer"}</p>
-                  <p className="text-sm text-muted-foreground">
+                <div className="min-w-0 flex-1">
+                  <p className="break-words font-black">
+                    {name || "Unnamed printer"}
+                  </p>
+                  <p className="break-words text-sm text-muted-foreground">
                     {role === "receipt"
                       ? "Customer receipts"
                       : "Kitchen tickets"}{" "}
                     · {paperWidth} mm · {dots} dots at {DEFAULT_PRINTER_DPI} DPI
                   </p>
-                  <p className="text-sm text-muted-foreground">
-                    {address}:{port}
+                  <p className="break-words text-sm text-muted-foreground">
+                    {connectionType === "system"
+                      ? `Windows queue: ${queueName}`
+                      : connectionType === "network"
+                        ? `${address}:${port}`
+                        : address}
                   </p>
                 </div>
                 <Badge
@@ -370,7 +603,12 @@ export function PrinterSetupWizard({
               </p>
             ) : null}
             <div className="flex flex-wrap justify-between gap-2">
-              <Button type="button" variant="ghost" onClick={() => setStep(3)}>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={testState === "testing"}
+                onClick={() => backTo(3)}
+              >
                 Back
               </Button>
               <div className="flex gap-2">
