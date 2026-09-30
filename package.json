@@ -1,6 +1,6 @@
 {
   "name": "ate05",
-  "version": "0.2.1-rc.2",
+  "version": "0.2.1-rc.3",
   "private": true,
   "packageManager": "pnpm@12.3.4",
   "scripts": {
