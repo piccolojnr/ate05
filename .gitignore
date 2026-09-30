@@ -10,3 +10,17 @@ apps/pos/src-tauri/gen/
 *.db-journal
 /.env.local
 /client_secret*.json
+
+# Local Windows code-signing material. Keep private keys and exported bundles out of Git.
+/.local-signing/
+*.pfx
+*.p12
+*.key
+*.pvk
+*.snk
+*.cer
+*.crt
+*.pem
+*.p7b
+*.p7c
+*.spc

@@ -48,4 +48,4 @@ commit; do not move an already-published prerelease tag.
 
 ## Signing status
 
-The initial macOS builds are unsigned and may require the tester to approve the app in macOS security settings. Windows signing is also not configured yet. Apple Developer and Windows code-signing credentials can be added later as GitHub Actions secrets without changing the release matrix.
+The initial macOS builds are unsigned and may require the tester to approve the app in macOS security settings. Windows signing infrastructure is prepared but disabled until the internal RiTech certificate and GitHub Actions secrets are provisioned. See [windows-code-signing.md](windows-code-signing.md) for setup, trust installation, and verification. Do not enable signing until the certificate and both secrets are protected and available.

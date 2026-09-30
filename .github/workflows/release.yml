@@ -61,13 +61,40 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Import Windows signing certificate
+        if: matrix.os == 'windows-latest' && vars.WINDOWS_CODE_SIGNING_ENABLED == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw 'Windows signing is enabled but required repository secrets are missing.'
+          }
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'ritech-signing.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, $bytes)
+          try {
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            if (-not $cert -or $cert.Subject -ne 'CN=RiTech' -or -not $cert.HasPrivateKey) {
+              throw 'Imported signing certificate is missing, lacks its private key, or has an unexpected subject.'
+            }
+            $thumbprint = $cert.Thumbprint
+            $config = @{ bundle = @{ windows = @{ certificateThumbprint = $thumbprint; digestAlgorithm = 'sha256'; timestampUrl = 'http://timestamp.digicert.com' } } } | ConvertTo-Json -Depth 5
+            Set-Content -Path 'apps/pos/src-tauri/windows-signing.json' -Value $config -Encoding utf8
+          }
+          finally {
+            Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Build and publish Tauri bundles
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/pos
-          args: ${{ matrix.args }}
+          args: ${{ matrix.os == 'windows-latest' && vars.WINDOWS_CODE_SIGNING_ENABLED == 'true' && '--config src-tauri/windows-signing.json' || matrix.args }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('ATE05 POS {0}', github.ref_name) || '' }}
           releaseBody: |
