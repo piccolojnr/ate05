@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Run unit tests
+        run: pnpm test:unit
+
+      - name: Run lint
+        run: pnpm lint
+
+      - name: Check types
+        run: pnpm typecheck
+
+      - name: Build frontend
+        run: pnpm build
+
+  rust:
+    name: Rust checks (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-22.04
+          - name: Windows
+            os: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Format check
+        working-directory: apps/pos/src-tauri
+        run: cargo fmt --check
+
+      - name: Compile check
+        working-directory: apps/pos/src-tauri
+        run: cargo check --locked
+
+      - name: Rust tests (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        working-directory: apps/pos/src-tauri
+        run: cargo test --locked -- --test-threads=1
+
+      - name: Rust tests (Windows)
+        if: matrix.os == 'windows-latest'
+        working-directory: apps/pos/src-tauri
+        shell: pwsh
+        run: |
+          $result = cargo test --locked -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The Windows Rust test suite failed.'
+          }
+          if ($result -notmatch 'backup::tests::file_hashing_fits_a_small_windows_stack_and_handles_chunk_boundaries\s+\.\.\. ok') {
+            throw 'The Windows small-stack SHA-256 regression test did not execute successfully.'
+          }
+          Write-Output 'Windows small-stack SHA-256 regression test passed.'
+
+      - name: Set up pnpm for the Windows bundle
+        if: matrix.os == 'windows-latest'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+
+      - name: Set up Node for the Windows bundle
+        if: matrix.os == 'windows-latest'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install frontend dependencies for the Windows bundle
+        if: matrix.os == 'windows-latest'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows NSIS and MSI installers
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: limited
+          CARGO_PROFILE_RELEASE_STRIP: none
+        run: pnpm --filter @ate05/pos exec tauri build --bundles nsis,msi
+
+      - name: Verify installers exclude debug files and record executable identity
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $releaseDir = 'apps/pos/src-tauri/target/release'
+          $exe = Join-Path $releaseDir 'ate05-pos.exe'
+          $pdb = @(Get-ChildItem -LiteralPath $releaseDir -Filter '*.pdb' | Where-Object { $_.BaseName -in @('ate05-pos', 'ate05_pos') })
+          $nsis = @(Get-ChildItem -LiteralPath (Join-Path $releaseDir 'bundle/nsis') -Filter '*setup.exe')
+          $msi = @(Get-ChildItem -LiteralPath (Join-Path $releaseDir 'bundle/msi') -Filter '*.msi')
+          if (-not (Test-Path -LiteralPath $exe) -or $pdb.Count -ne 1 -or $nsis.Count -ne 1 -or $msi.Count -ne 1) {
+            throw 'Expected the Windows executable, matching PDB, NSIS installer, and MSI installer.'
+          }
+          $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
+          $extractDir = Join-Path $env:RUNNER_TEMP 'ate05-nsis-inspect'
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+          & $sevenZip x -y "-o$extractDir" $nsis[0].FullName | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the NSIS installer contents.' }
+          $nsisDebugFiles = @(Get-ChildItem -LiteralPath $extractDir -Recurse -File | Where-Object { $_.Extension -in @('.pdb', '.ilk', '.dmp') })
+          if ($nsisDebugFiles.Count -gt 0) { throw 'NSIS installer unexpectedly contains debug files.' }
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $database = $installer.OpenDatabase($msi[0].FullName, 0)
+          $view = $database.OpenView('SELECT `FileName` FROM `File`')
+          $view.Execute()
+          $msiDebugFiles = @()
+          while ($record = $view.Fetch()) {
+            $fileName = ($record.StringData(1) -split '\|')[-1]
+            if ([IO.Path]::GetExtension($fileName) -in @('.pdb', '.ilk', '.dmp')) { $msiDebugFiles += $fileName }
+          }
+          if ($msiDebugFiles.Count -gt 0) { throw 'MSI installer unexpectedly contains debug files.' }
+          @(
+            "commit=$env:GITHUB_SHA"
+            "ref=$env:GITHUB_REF_NAME"
+            "exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant())"
+            "pdb_file=$($pdb[0].Name)"
+            "pdb_sha256=$((Get-FileHash -LiteralPath $pdb[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
+            "rustc=$(& rustc --version)"
+            "nsis_installer=$($nsis[0].Name)"
+            "msi_installer=$($msi[0].Name)"
+            'installer_debug_files=none'
+          ) | Set-Content -LiteralPath (Join-Path $releaseDir 'windows-build-identity.txt') -Encoding utf8
+
+      - name: Retain Windows installers
+        if: matrix.os == 'windows-latest' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ate05-windows-x64-installers-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            apps/pos/src-tauri/target/release/bundle/nsis/*setup.exe
+            apps/pos/src-tauri/target/release/bundle/msi/*.msi
+
+      - name: Retain Windows crash-analysis symbols
+        if: matrix.os == 'windows-latest' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ate05-windows-x64-crash-symbols-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            apps/pos/src-tauri/target/release/ate05-pos.exe
+            apps/pos/src-tauri/target/release/ate05*.pdb
+            apps/pos/src-tauri/target/release/windows-build-identity.txt
