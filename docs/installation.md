@@ -35,6 +35,17 @@ After setup, ATE05 opens the normal staff lock screen. Use the owner PIN to
 sign in. See [first-run-setup.md](first-run-setup.md) for the setup state and
 resume behavior.
 
+## Windows receipt and kitchen printers
+
+ATE05 now supports installed Windows thermal printer queues, including USB and
+paired Bluetooth printers. Install the printer in Windows **Printers & scanners**
+and print a Windows test page first. Then use **Settings → Printers → Add printer
+→ Printer installed on this PC** in ATE05. No IP address or network port is
+required. Existing network printer settings are retained during upgrades.
+
+Follow [printer-configuration.md](printer-configuration.md) for setup,
+troubleshooting, and the installer's pending physical acceptance checklist.
+
 ## Backups and upgrades
 
 Use Settings → Data & backup for local backups and Export Backup to write a

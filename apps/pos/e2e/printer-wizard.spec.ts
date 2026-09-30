@@ -80,7 +80,7 @@ test("network setup retains TCP settings and preview clearly simulates printing"
   await page.getByRole("button", { name: "Network printer" }).click();
   await page.getByLabel("Friendly name").fill("Front counter");
   await page.getByLabel("Address or device name").fill("receipt.local");
-  await page.getByLabel("Network port").fill("9100");
+  await expect(page.getByLabel("Network port")).toHaveValue("9100");
   await expectFits(page);
   await review(page);
   await expect(page.getByText("receipt.local:9100")).toBeVisible();
@@ -141,6 +141,9 @@ test("Windows queues load, refresh, autofill friendly names and save a separate 
     page.getByText(`Windows queue: ${queues[1].name}`),
   ).toBeVisible();
   await saveAndTest(page);
+  await expect(page.getByRole("status")).toContainText(
+    "Windows accepted the test job.",
+  );
   const result = await page.evaluate(() => window.printerWizardResult);
   expect(result.commands).toEqual([
     "list_printer_queues",
@@ -383,5 +386,31 @@ test("save failures keep the error visible and do not request a test print", asy
   ).toBeDisabled();
   expect(await page.evaluate(() => window.printerWizardResult.tests)).toEqual(
     [],
+  );
+});
+
+test("offline Windows queues explain recovery and distinguish spooler acceptance from physical printing", async ({
+  page,
+}) => {
+  await mount(page, {
+    responses: [{ queues: [{ ...queues[0], status: 0x80 }] }],
+  });
+  await page
+    .getByRole("button", { name: "Printer installed on this PC", exact: true })
+    .click();
+  await page.getByLabel("Installed printer queue").selectOption(queues[0].name);
+  await expect(page.getByRole("status")).toContainText(
+    "Windows reports this printer offline.",
+  );
+  await expect(
+    page.getByText(
+      "No IP address or network port is needed. Windows manages this connection.",
+    ),
+  ).toBeVisible();
+  await expectFits(page);
+  await review(page);
+  await saveAndTest(page);
+  await expect(page.getByRole("status")).toContainText(
+    "Confirm that the slip physically printed",
   );
 });

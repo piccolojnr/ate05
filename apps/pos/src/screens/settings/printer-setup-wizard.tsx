@@ -346,6 +346,21 @@ export function PrinterSetupWizard({
                       : ""}
                   </p>
                 ) : null}
+                <p className="text-xs text-muted-foreground">
+                  No IP address or network port is needed. Windows manages this
+                  connection.
+                </p>
+                {selectedQueue && (selectedQueue.status & 0x80) !== 0 ? (
+                  <p
+                    role="status"
+                    className="rounded-lg bg-muted/40 p-3 text-sm"
+                  >
+                    Windows reports this printer offline. Check its power and
+                    USB or Bluetooth connection, open its Windows print queue,
+                    and print a Windows test page before trying an ATE05 test
+                    slip. Accepted jobs may wait until it reconnects.
+                  </p>
+                ) : null}
                 {!loadingQueues && !queueError && queues.length === 0 ? (
                   native ? (
                     <div
@@ -600,6 +615,15 @@ export function PrinterSetupWizard({
             {testState === "success" && !native ? (
               <p className="rounded-lg bg-success/10 p-3 text-sm font-semibold text-success">
                 Preview test succeeded. No physical printer was contacted.
+              </p>
+            ) : null}
+            {testState === "success" &&
+            native &&
+            connectionType === "system" ? (
+              <p role="status" className="rounded-lg bg-muted/40 p-3 text-sm">
+                Windows accepted the test job. Confirm that the slip physically
+                printed before finishing; an offline printer may keep the job
+                waiting.
               </p>
             ) : null}
             <div className="flex flex-wrap justify-between gap-2">

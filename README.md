@@ -70,4 +70,10 @@ The SQLite service itself is initialized with `initializeDatabase`, then explici
 
 The repository deliberately has no backend server, cloud API, authentication provider, or microservice. Future kitchen-display, back-office, waiter, and sync applications can reuse `domain`, `database`, `validation`, and `ui` without putting business rules in the POS shell.
 
-Kitchen tickets can be sent to a configured network ESC/POS printer over a configurable raw TCP port (commonly 9100). Printing is post-commit: printer failures leave tickets persisted and retryable. USB and Bluetooth printing, customer receipts, and cash drawers are intentionally deferred.
+Customer receipts and kitchen tickets can be sent to a network ESC/POS printer
+over raw TCP (port 9100 by default), or to an installed Windows printer queue.
+USB and Bluetooth thermal printers work through **Printer installed on this PC**
+once Windows has installed them as printers; no network address or port is
+needed. Printing is post-commit: printer failures leave documents persisted and
+retryable. Direct USB transport and cash drawers remain deferred. See the
+[staff printer setup and troubleshooting guide](docs/printer-configuration.md).
