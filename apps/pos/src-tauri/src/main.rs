@@ -234,12 +234,7 @@ async fn print_receipt(request: PrinterRequest, receipt: ReceiptRequest) -> Resu
 }
 
 fn send_print(request: &PrinterRequest, bytes: &[u8]) -> Result<(), String> {
-    match printing::transport(request)? {
-        printing::Transport::Network => send_tcp(request, bytes),
-        printing::Transport::System => {
-            printing::send_system(request.queue_name.as_deref().unwrap(), bytes)
-        }
-    }
+    printing::dispatch(request, bytes, send_tcp, printing::send_system)
 }
 
 #[tauri::command]
@@ -685,6 +680,109 @@ async fn restore_cloud_backup(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_receipt() -> ReceiptRequest {
+        ReceiptRequest {
+            business_name: "Printer regression cafe".into(),
+            receipt_number: 12,
+            order_number: 42,
+            issued_at: "30 Sep 2026 12:00".into(),
+            table_name: None,
+            items: vec![ReceiptItemRequest {
+                name: "Rice".into(),
+                quantity: 1,
+                line_total_minor: 5000,
+            }],
+            subtotal_minor: 5000,
+            total_minor: 5000,
+            reprint: false,
+            payments: vec![ReceiptPaymentRequest {
+                method: "cash".into(),
+                amount_minor: 5000,
+            }],
+        }
+    }
+
+    fn sample_ticket() -> KitchenTicketRequest {
+        KitchenTicketRequest {
+            order_number: 42,
+            table_name: None,
+            sequence: 1,
+            ticket_type: "initial".into(),
+            created_at: "30 Sep 2026 12:00".into(),
+            reprint: false,
+            items: vec![KitchenTicketItemRequest {
+                item_name: "Rice".into(),
+                quantity: 1,
+                action: "add".into(),
+                notes: None,
+            }],
+        }
+    }
+
+    async fn invoke_print_command(command: &str, request: PrinterRequest) -> Result<(), String> {
+        match command {
+            "receipt" => print_receipt(request, sample_receipt()).await,
+            "kitchen" => print_kitchen_ticket(request, sample_ticket()).await,
+            "test" => test_printer(request, "30 Sep 2026 12:00".into()).await,
+            _ => panic!("unexpected print command"),
+        }
+    }
+
+    #[test]
+    fn all_native_print_commands_send_escpos_to_tcp_for_network_printers() {
+        use std::io::Read;
+        for (command, marker) in [
+            ("receipt", "CUSTOMER RECEIPT"),
+            ("kitchen", "KITCHEN ORDER"),
+            ("test", "KITCHEN PRINTER TEST"),
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let reader = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut received = Vec::new();
+                stream.read_to_end(&mut received).unwrap();
+                received
+            });
+            let request = PrinterRequest {
+                connection_type: "network".into(),
+                address: "127.0.0.1".into(),
+                port: Some(port),
+                queue_name: Some("This queue must not be used".into()),
+                paper_width: 80,
+                cutter_enabled: true,
+            };
+            tauri::async_runtime::block_on(invoke_print_command(command, request)).unwrap();
+            let bytes = reader.join().unwrap();
+            assert!(bytes.starts_with(&[0x1b, 0x40]));
+            assert!(String::from_utf8_lossy(&bytes).contains(marker));
+            assert!(bytes.ends_with(&[0x1d, 0x56, 0]));
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn all_native_print_commands_reject_system_on_unsupported_platforms_without_tcp_fallback() {
+        for command in ["receipt", "kitchen", "test"] {
+            let request = PrinterRequest {
+                connection_type: "system".into(),
+                address: String::new(),
+                port: None,
+                queue_name: Some("Selected Windows queue".into()),
+                paper_width: 80,
+                cutter_enabled: true,
+            };
+            assert!(
+                tauri::async_runtime::block_on(invoke_print_command(command, request))
+                    .unwrap_err()
+                    .starts_with("unsupported_platform:")
+            );
+        }
+    }
 
     #[test]
     fn network_dispatch_sends_the_original_escpos_bytes() {

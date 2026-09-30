@@ -64,6 +64,20 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{list_queues, send_system};
 
+/// One dispatch boundary for every document; adapters receive the validated
+/// configuration and original ESC/POS bytes without substituting a destination.
+pub fn dispatch(
+    request: &PrinterRequest,
+    bytes: &[u8],
+    network: impl FnOnce(&PrinterRequest, &[u8]) -> Result<(), String>,
+    system: impl FnOnce(&str, &[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    match transport(request)? {
+        Transport::Network => network(request, bytes),
+        Transport::System => system(request.queue_name.as_deref().unwrap(), bytes),
+    }
+}
+
 #[cfg(not(windows))]
 pub fn list_queues() -> Result<Vec<PrinterQueue>, String> {
     Err("unsupported_platform: installed printer queues are supported only on Windows".into())
@@ -138,6 +152,43 @@ mod tests {
                 .unwrap_err()
                 .starts_with("unsupported_transport:"));
         }
+    }
+
+    #[test]
+    fn dispatch_passes_the_selected_queue_and_original_bytes_only_to_system_adapter() {
+        for queue in ["Generic / Text Only", "Kitchen Bluetooth — Thermal"] {
+            let mut printer = request("system");
+            printer.queue_name = Some(queue.into());
+            let bytes = [0x1b, 0x40, b'A', 0x1d, 0x56, 0];
+            dispatch(
+                &printer,
+                &bytes,
+                |_, _| panic!("system printers must not use TCP"),
+                |name, payload| {
+                    assert_eq!(name, queue);
+                    assert_eq!(payload, bytes);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        }
+        let mut printer = request("network");
+        printer.address = "printer.local".into();
+        printer.port = Some(9100);
+        // A stale queue value must never override an explicitly saved network transport.
+        printer.queue_name = Some("Unrelated queue".into());
+        dispatch(
+            &printer,
+            b"network",
+            |config, payload| {
+                assert_eq!(config.address, "printer.local");
+                assert_eq!(config.port, Some(9100));
+                assert_eq!(payload, b"network");
+                Ok(())
+            },
+            |_, _| panic!("network printers must not use the spooler"),
+        )
+        .unwrap();
     }
 
     #[test]

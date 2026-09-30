@@ -186,7 +186,7 @@ mod tests {
                 .unwrap();
             sqlx::query("INSERT INTO printers VALUES ('lan', 'b', 'Receipt', 'receipt', 'network', 'printer.local', 9100, 58, 0, 1, 'created', 'updated'), ('usb', 'b', 'Kitchen', 'kitchen', 'usb', 'legacy-device', NULL, 80, 1, 0, 'created', 'updated')")
                 .execute(&pool).await.unwrap();
-            sqlx::query("INSERT INTO print_attempts VALUES ('attempt', 'b', 'test', 'test-document', 'lan', 'test', 'created', 1, NULL, NULL)")
+            sqlx::query("INSERT INTO print_attempts VALUES ('attempt', 'b', 'test', 'test-document', 'lan', 'test', 'created', 1, NULL, NULL), ('usb-attempt', 'b', 'test', 'test-document', 'usb', 'test', 'created', 0, 'unsupported_transport', 'Direct USB is unsupported')")
                 .execute(&pool).await.unwrap();
             let query = "SELECT id, connection_type, address, port, paper_width, cutter_enabled, active, created_at, updated_at FROM printers ORDER BY id";
             type LegacyConfig = (
@@ -225,6 +225,15 @@ mod tests {
                 .await
                 .unwrap(),
                 "lan"
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT printer_id FROM print_attempts WHERE id = 'usb-attempt'"
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+                "usb"
             );
             assert_eq!(
                 sqlx::query_scalar::<_, i64>(
