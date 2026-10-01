@@ -43,9 +43,20 @@ test("cashier can create, persist, and reopen a local order", async ({
   );
   await page.getByRole("button", { name: "Send to Kitchen" }).click();
   await expect(page.getByLabel("Current order")).toContainText("Ticket #2");
-  await page.getByRole("button", { name: "Orders" }).click();
-  await expect(page.getByRole("heading", { name: "Orders" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Order" }).first().click();
+  await page
+    .getByLabel("Primary navigation")
+    .getByRole("button", { name: "Orders", exact: true })
+    .click();
+  await expect(
+    page
+      .locator("header")
+      .filter({ hasText: "ATE05 Operations" })
+      .getByRole("heading", { name: "Orders", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Open Order", exact: true })
+    .first()
+    .click();
   await expect(page.getByLabel("Note for Fried Rice")).toHaveValue("No pepper");
   await expect(page.getByLabel("Current order")).toContainText("Ticket #1");
   await expect(page.getByLabel("Current order")).toContainText("Ticket #2");
@@ -65,14 +76,28 @@ test("cashier can create, persist, and reopen a local order", async ({
   ).toBeVisible();
   await page.reload();
   await signIn(page);
-  await page.getByRole("button", { name: "Orders" }).click();
-  await page.getByRole("button", { name: "Open Order" }).first().click();
+  await page
+    .getByLabel("Primary navigation")
+    .getByRole("button", { name: "Orders", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Open Order", exact: true })
+    .first()
+    .click();
   await expect(page.getByLabel("Current order")).toContainText("GHS 135.00");
 });
 
 test("renders local seating data", async ({ page }) => {
-  await page.getByRole("button", { name: "Tables" }).click();
-  await expect(page.getByRole("heading", { name: "Tables" })).toBeVisible();
+  await page
+    .getByLabel("Primary navigation")
+    .getByRole("button", { name: "Tables", exact: true })
+    .click();
+  await expect(
+    page
+      .locator("header")
+      .filter({ hasText: "ATE05 Operations" })
+      .getByRole("heading", { name: "Tables", exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("Table 1")).toBeVisible();
 });
 
@@ -84,7 +109,10 @@ test("operator can turn over a table through explicit order completion", async (
   );
   await page.reload();
   await signIn(page);
-  await page.getByRole("button", { name: "Tables" }).click();
+  await page
+    .getByLabel("Primary navigation")
+    .getByRole("button", { name: "Tables", exact: true })
+    .click();
   await page.getByRole("button", { name: "Add Table" }).click();
   await page.getByRole("dialog").getByLabel("Table name").fill("Patio 1");
   await page
@@ -96,19 +124,28 @@ test("operator can turn over a table through explicit order completion", async (
   await page.getByRole("button", { name: "Add Fried Rice" }).click();
   await expect(page.getByLabel("Current order")).toContainText("Patio 1");
 
-  await page.getByRole("button", { name: "Tables" }).click();
+  await page
+    .getByLabel("Primary navigation")
+    .getByRole("button", { name: "Tables", exact: true })
+    .click();
   await expect(page.getByText("Active order at this table")).toBeVisible();
-  await page.getByRole("button", { name: "Open Order" }).click();
+  await page.getByRole("button", { name: "Open Order", exact: true }).click();
   await page.getByRole("button", { name: "Take Payment" }).click();
   await page.getByRole("button", { name: "Confirm Payment" }).click();
-  await page.getByRole("button", { name: "Tables" }).click();
+  await page
+    .getByLabel("Primary navigation")
+    .getByRole("button", { name: "Tables", exact: true })
+    .click();
   await expect(page.getByText("Active order at this table")).toBeVisible();
 
-  await page.getByRole("button", { name: "Open Order" }).click();
+  await page.getByRole("button", { name: "Open Order", exact: true }).click();
   await page
     .getByRole("button", { name: "Complete Order · Release Table" })
     .click();
-  await page.getByRole("button", { name: "Tables" }).click();
+  await page
+    .getByLabel("Primary navigation")
+    .getByRole("button", { name: "Tables", exact: true })
+    .click();
   await expect(
     page.getByText("Available for a new dine-in order").last(),
   ).toBeVisible();
@@ -125,7 +162,10 @@ test("operator can manage persisted menu items and use them in POS", async ({
   await signIn(page);
   await page.getByRole("button", { name: "Menu", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Menu", exact: true }),
+    page
+      .locator("header")
+      .filter({ hasText: "ATE05 Operations" })
+      .getByRole("heading", { name: "Menu", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "New Menu Item" }).click();
   await page.getByLabel("Item name").fill("Garden Salad");

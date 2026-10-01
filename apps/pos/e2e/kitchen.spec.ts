@@ -23,7 +23,12 @@ test("kitchen board advances a persisted ticket through its stages", async ({
   await page.getByRole("button", { name: "Add Fried Rice" }).click();
   await page.getByRole("button", { name: "Send to Kitchen" }).click();
   await page.getByRole("button", { name: "Kitchen", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Kitchen" })).toBeVisible();
+  await expect(
+    page
+      .locator("header")
+      .filter({ hasText: "ATE05 Operations" })
+      .getByRole("heading", { name: "Kitchen", exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("#0001")).toBeVisible();
   await page.screenshot({
     path: "docs/artifacts/kitchen-board-1024.png",
