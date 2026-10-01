@@ -14,7 +14,7 @@ The `drive.file` scope lets ATE05 create and manage files it creates, including 
 
 Access and refresh tokens are serialized in the operating system credential store. On startup, ATE05 loads saved credentials and refreshes an expired access token when possible. A temporary Drive or network check failure leaves saved authorization intact. A missing credential, credential-store error, or invalid/revoked refresh token is reported separately so Settings can explain whether reconnecting is needed.
 
-The desktop OAuth client ID and client secret are provided through build/runtime configuration, not tracked source. The desktop client secret is not a trustworthy secret. Never commit it or include it in logs or test fixtures.
+The desktop OAuth client ID and client secret are read at Rust compile time using `option_env!`, not at application runtime. Supply them to the native build process; setting environment variables on an installed application does not change its compiled configuration. The desktop client secret is embedded in the executable and can be extracted, so it is not a confidentiality boundary. Never commit it or include it separately in logs, manifests, or test fixtures.
 
 ## Cloud backup and restore
 
@@ -31,4 +31,17 @@ The ordinary backup list excludes recovery-envelope objects left by earlier buil
 3. Create an OAuth client with application type **Desktop app**.
 4. Provide `ATE05_GOOGLE_CLIENT_ID` and `ATE05_GOOGLE_CLIENT_SECRET` to the native development/build process.
 
-The loopback redirect uses a dynamically allocated local port. Google currently requires the desktop credential's `client_secret` field at its token endpoint; for a desktop client this value is not a security boundary. PKCE, state validation, and OS credential storage remain important.
+The loopback redirect uses a dynamically allocated local port. ATE05 currently requires both credential fields for authorization-code exchange and refresh. Google's installed-app documentation lists `client_secret` as optional and explains that installed applications cannot keep it confidential. Use a **Desktop app** client, not a confidential Web application client. PKCE S256, state validation, the system browser, and OS credential storage remain unchanged. See [Google's installed-app OAuth guidance](https://developers.google.com/identity/protocols/oauth2/native-app).
+
+## Official release configuration
+
+In the GitHub repository, open **Settings → Secrets and variables → Actions**:
+
+1. Under **Variables**, create repository variable `ATE05_GOOGLE_CLIENT_ID`.
+2. Under **Secrets**, create repository secret `ATE05_GOOGLE_CLIENT_SECRET`.
+
+Use the two fields from the same Google **Desktop app** OAuth client. Do not store access or refresh tokens in GitHub. Confirm the Drive API is enabled and the consent screen audience/publishing status is appropriate for production. While the consent screen is in testing, only allowed test users can authorize; this is not a production acceptance substitute.
+
+The release workflow checks only presence and fails before any build job if either setting is empty or whitespace. Values are scoped to the validation step and Tauri build step, not normal PR/CI. They are not written to configuration files or diagnostic manifests. The compiled desktop executable necessarily contains the client configuration.
+
+To check repository configuration without creating a tag, rebuilding RC.4, or publishing anything, run **Release desktop apps → Run workflow** on `main`, enable **Check OAuth configuration without building or publishing**, and leave the existing-release-tag field blank. A successful result proves presence only, not that the client type, credentials, consent screen, or real OAuth flow are valid. Keep Actions debug logging disabled when using production credentials.

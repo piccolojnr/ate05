@@ -38,6 +38,9 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
+      - name: Test release OAuth configuration validation
+        run: node --test scripts/check-google-oauth-config.test.mjs
+
       - name: Run unit tests
         run: pnpm test:unit
 

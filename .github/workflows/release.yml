@@ -10,12 +10,38 @@ on:
         description: Existing release tag to rebuild without moving the tag
         required: false
         type: string
+      validate_only:
+        description: Check OAuth configuration without building or publishing
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
+  oauth-config:
+    name: Verify release OAuth configuration
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check required configuration presence
+        env:
+          ATE05_GOOGLE_CLIENT_ID: ${{ vars.ATE05_GOOGLE_CLIENT_ID }}
+          ATE05_GOOGLE_CLIENT_SECRET: ${{ secrets.ATE05_GOOGLE_CLIENT_SECRET }}
+        run: |
+          node --input-type=module <<'JS'
+          import { checkGoogleOAuthConfig } from './scripts/check-google-oauth-config.mjs';
+          if (!checkGoogleOAuthConfig(process.env, console.log)) process.exit(1);
+          JS
+
   build:
+    needs: oauth-config
+    if: ${{ !inputs.validate_only }}
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -139,6 +165,8 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ATE05_GOOGLE_CLIENT_ID: ${{ vars.ATE05_GOOGLE_CLIENT_ID }}
+          ATE05_GOOGLE_CLIENT_SECRET: ${{ secrets.ATE05_GOOGLE_CLIENT_SECRET }}
         with:
           projectPath: apps/pos
           args: ${{ matrix.os == 'windows-latest' && vars.WINDOWS_CODE_SIGNING_ENABLED == 'true' && '--config src-tauri/windows-signing.json' || matrix.args }}
