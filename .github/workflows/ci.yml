@@ -50,6 +50,21 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
+      - name: Install Chromium for browser tests
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: pnpm test:e2e --workers=2
+
+      - name: Retain failed browser test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-diagnostics-${{ github.sha }}
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   rust:
     name: Rust checks (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
@@ -140,43 +155,7 @@ jobs:
       - name: Verify installers exclude debug files and record executable identity
         if: matrix.os == 'windows-latest'
         shell: pwsh
-        run: |
-          $releaseDir = 'apps/pos/src-tauri/target/release'
-          $exe = Join-Path $releaseDir 'ate05-pos.exe'
-          $pdb = @(Get-ChildItem -LiteralPath $releaseDir -Filter '*.pdb' | Where-Object { $_.BaseName -in @('ate05-pos', 'ate05_pos') })
-          $nsis = @(Get-ChildItem -LiteralPath (Join-Path $releaseDir 'bundle/nsis') -Filter '*setup.exe')
-          $msi = @(Get-ChildItem -LiteralPath (Join-Path $releaseDir 'bundle/msi') -Filter '*.msi')
-          if (-not (Test-Path -LiteralPath $exe) -or $pdb.Count -ne 1 -or $nsis.Count -ne 1 -or $msi.Count -ne 1) {
-            throw 'Expected the Windows executable, matching PDB, NSIS installer, and MSI installer.'
-          }
-          $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
-          $extractDir = Join-Path $env:RUNNER_TEMP 'ate05-nsis-inspect'
-          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
-          & $sevenZip x -y "-o$extractDir" $nsis[0].FullName | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the NSIS installer contents.' }
-          $nsisDebugFiles = @(Get-ChildItem -LiteralPath $extractDir -Recurse -File | Where-Object { $_.Extension -in @('.pdb', '.ilk', '.dmp') })
-          if ($nsisDebugFiles.Count -gt 0) { throw 'NSIS installer unexpectedly contains debug files.' }
-          $installer = New-Object -ComObject WindowsInstaller.Installer
-          $database = $installer.OpenDatabase($msi[0].FullName, 0)
-          $view = $database.OpenView('SELECT `FileName` FROM `File`')
-          $view.Execute()
-          $msiDebugFiles = @()
-          while ($record = $view.Fetch()) {
-            $fileName = ($record.StringData(1) -split '\|')[-1]
-            if ([IO.Path]::GetExtension($fileName) -in @('.pdb', '.ilk', '.dmp')) { $msiDebugFiles += $fileName }
-          }
-          if ($msiDebugFiles.Count -gt 0) { throw 'MSI installer unexpectedly contains debug files.' }
-          @(
-            "commit=$env:GITHUB_SHA"
-            "ref=$env:GITHUB_REF_NAME"
-            "exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant())"
-            "pdb_file=$($pdb[0].Name)"
-            "pdb_sha256=$((Get-FileHash -LiteralPath $pdb[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
-            "rustc=$(& rustc --version)"
-            "nsis_installer=$($nsis[0].Name)"
-            "msi_installer=$($msi[0].Name)"
-            'installer_debug_files=none'
-          ) | Set-Content -LiteralPath (Join-Path $releaseDir 'windows-build-identity.txt') -Encoding utf8
+        run: ./scripts/verify-windows-build.ps1
 
       - name: Retain Windows installers
         if: matrix.os == 'windows-latest' && success()

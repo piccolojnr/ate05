@@ -30,7 +30,7 @@ installer or GitHub release assets.
 1. Identify the release tag and commit used to create the installed executable.
 2. Download the crash-symbol artifact from that commit's GitHub Actions run.
 3. Compare the installed executable's SHA-256 with `exe_sha256` in
-   `windows-build-identity.txt` (branch CI) or `windows-symbols.txt` (release CI):
+   `windows-build-identity.txt` (`windows-symbols.txt` in older release CI runs):
 
    ```powershell
    Get-FileHash "$env:LOCALAPPDATA\ATE05 POS\ate05-pos.exe" -Algorithm SHA256

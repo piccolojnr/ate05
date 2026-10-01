@@ -67,8 +67,11 @@ jobs:
         working-directory: apps/pos/src-tauri
         run: |
           cargo fmt --check
+          if ($LASTEXITCODE -ne 0) { throw 'Rust formatting failed.' }
           cargo check --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Rust compilation failed.' }
           cargo test --locked -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed.' }
 
       - name: Import Windows signing certificate
         if: matrix.os == 'windows-latest' && vars.WINDOWS_CODE_SIGNING_ENABLED == 'true'
@@ -114,44 +117,34 @@ jobs:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('ATE05 POS {0}', github.ref_name) || '' }}
           releaseBody: |
-            ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-rc.') && '**TEST RELEASE — Windows printer support:** Windows printer queue discovery and physical USB/Bluetooth printing still need verification on Windows. Install or pair the printer in Windows, add it under Printers & scanners, then select its installed queue in ATE05 Settings → Printers and print a test slip before using it for live orders.' || '' }}
+            ## ATE05 POS 0.2.1 RC.4
 
-            ## Install ATE05 POS
+            This release candidate includes a Windows startup reliability fix, improved backup reliability, better Windows crash diagnostics and symbol support, and the previous 0.2.1 printer and setup improvements. Kitchen tickets and customer receipts have been tested successfully on physical printers.
 
-            Download the file for your operating system and CPU, install it normally, and launch ATE05 POS. A fresh installation opens the restaurant setup wizard; it does not ask configuration questions in the OS installer.
+            On Windows, download the x64 setup EXE below, run the installer, and launch ATE05 POS. Existing POS data should open normally; a fresh installation opens the setup wizard. Keep a separate backup of your data.
 
-            Start by setting the owner PIN, choose an editable starter menu if useful, add initial tables, and configure printers later in Settings. Keep an exported backup on separate storage.
+            Windows builds are signed by RiTech. SmartScreen may still show an unrecognized-app warning because application reputation is separate from signing. Check the publisher and download source before proceeding; do not disable Windows security protections globally.
 
-            Cloud backups created by this release are not encrypted by ATE05. Anyone with access to the Google account or a downloaded backup file may be able to read its restaurant data. Keep the Google account secure and protect exported backup files.
+            Cloud backups are not encrypted by ATE05. Protect the Google account and exported backup files.
 
-            macOS and Windows artifacts require platform security approval until production signing credentials are configured.
+            Final Windows regression testing is required before stable 0.2.1 approval.
           releaseDraft: false
           prerelease: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-rc.') }}
-          generateReleaseNotes: true
+          generateReleaseNotes: false
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: "ate05-[platform]-[arch]-[bundle]"
 
-      - name: Record Windows executable identity
-        if: matrix.os == 'windows-latest' && !cancelled()
+      - name: Verify Windows signatures, installer contents, and build identity
+        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          $exe = 'apps/pos/src-tauri/target/release/ate05-pos.exe'
-          $pdb = @(Get-ChildItem -LiteralPath 'apps/pos/src-tauri/target/release' -Filter '*.pdb' |
-            Where-Object { $_.BaseName -in @('ate05-pos', 'ate05_pos') })
-          if (-not (Test-Path -LiteralPath $exe) -or $pdb.Count -ne 1) {
-            throw 'The Windows executable or PDB was not produced.'
+          if ('${{ vars.WINDOWS_CODE_SIGNING_ENABLED }}' -ne 'true') {
+            throw 'Windows release signing must be enabled.'
           }
-          @(
-            "commit=$env:GITHUB_SHA"
-            "ref=$env:GITHUB_REF_NAME"
-            "exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant())"
-            "pdb_file=$($pdb[0].Name)"
-            "pdb_sha256=$((Get-FileHash -LiteralPath $pdb[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
-            "rustc=$(& rustc --version)"
-          ) | Set-Content -LiteralPath 'apps/pos/src-tauri/target/release/windows-symbols.txt' -Encoding utf8
+          ./scripts/verify-windows-build.ps1 -RequireSigning
 
       - name: Retain Windows crash-analysis symbols
-        if: matrix.os == 'windows-latest' && !cancelled()
+        if: matrix.os == 'windows-latest' && success()
         uses: actions/upload-artifact@v4
         with:
           name: ate05-windows-x64-crash-symbols-${{ github.sha }}
@@ -160,4 +153,4 @@ jobs:
           path: |
             apps/pos/src-tauri/target/release/ate05-pos.exe
             apps/pos/src-tauri/target/release/ate05*.pdb
-            apps/pos/src-tauri/target/release/windows-symbols.txt
+            apps/pos/src-tauri/target/release/windows-build-identity.txt
