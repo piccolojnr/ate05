@@ -21,7 +21,8 @@ remain the evidence for native failures.
 
 Every Windows CI or release workflow run retains a crash-analysis CI artifact
 named `ate05-windows-x64-crash-symbols-<commit>`. It contains the release
-`ate05-pos.exe`, its application PDB, and an identity manifest with the commit,
+the exact NSIS-installed `ate05-pos.exe`, the MSI-installed executable under
+`msi/`, their shared application PDB, and an identity manifest with the commit,
 ref, compiler version, and SHA-256 hashes. Cargo release builds retain limited
 debug information and do not strip symbols. The PDB is kept in CI for 90 days;
 archive it with your release records before it expires. It is not added to the
@@ -29,7 +30,8 @@ installer or GitHub release assets.
 
 1. Identify the release tag and commit used to create the installed executable.
 2. Download the crash-symbol artifact from that commit's GitHub Actions run.
-3. Compare the installed executable's SHA-256 with `exe_sha256` in
+3. Compare the installed executable's SHA-256 with `exe_sha256` (NSIS) or
+   `msi_exe_sha256` (MSI) in
    `windows-build-identity.txt` (`windows-symbols.txt` in older release CI runs):
 
    ```powershell
@@ -45,6 +47,11 @@ installer or GitHub release assets.
    lmvm ate05_pos
    !analyze -v
    ```
+
+For MSI installations, use the executable in `msi/` with the shared PDB. Tauri
+patches an installer-type marker before signing each package, so the unbundled
+build executable has a different hash. CI verifies both installed executables'
+CodeView GUID and age against the PDB and records their hashes.
 
 Confirm WinDbg loads the PDB without a signature/age mismatch: the executable's
 CodeView debug record identifies the exact PDB by GUID and age. If loading fails,

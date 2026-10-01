@@ -150,7 +150,4 @@ jobs:
           name: ate05-windows-x64-crash-symbols-${{ github.sha }}
           if-no-files-found: error
           retention-days: 90
-          path: |
-            apps/pos/src-tauri/target/release/ate05-pos.exe
-            apps/pos/src-tauri/target/release/ate05*.pdb
-            apps/pos/src-tauri/target/release/windows-build-identity.txt
+          path: apps/pos/src-tauri/target/release/crash-analysis/
