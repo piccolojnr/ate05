@@ -388,20 +388,25 @@ describe("POS application service", () => {
       priceOptionId: large.id,
       orderType: "takeaway",
     });
-    expect(order.items).toEqual([
-      expect.objectContaining({
-        priceOptionId: small.id,
-        priceOptionName: "Small",
-        unitPriceMinor: 6000,
-        quantity: 1,
-      }),
-      expect.objectContaining({
-        priceOptionId: large.id,
-        priceOptionName: "Large",
-        unitPriceMinor: 11000,
-        quantity: 2,
-      }),
-    ]);
+    // Lines created in the same millisecond are ordered by random UUID, not
+    // by which price option was added first. Assert both snapshots by identity.
+    expect(order.items).toHaveLength(2);
+    expect(order.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          priceOptionId: small.id,
+          priceOptionName: "Small",
+          unitPriceMinor: 6000,
+          quantity: 1,
+        }),
+        expect.objectContaining({
+          priceOptionId: large.id,
+          priceOptionName: "Large",
+          unitPriceMinor: 11000,
+          quantity: 2,
+        }),
+      ]),
+    );
     expect(order.totalMinor).toBe(28000);
 
     service.updateMenuItem({
@@ -420,7 +425,9 @@ describe("POS application service", () => {
     });
     const historical = service.getOrder(order.id, business);
     expect(historical.totalMinor).toBe(28000);
-    expect(historical.items[1]).toMatchObject({
+    expect(
+      historical.items.find((item) => item.priceOptionId === large.id),
+    ).toMatchObject({
       priceOptionName: "Large",
       unitPriceMinor: 11000,
       quantity: 2,
@@ -490,20 +497,23 @@ describe("POS application service", () => {
       orderType: "takeaway",
     });
 
-    expect(order.items).toEqual([
-      expect.objectContaining({
-        priceOptionId: null,
-        priceOptionName: "Large",
-        unitPriceMinor: 11000,
-        quantity: 1,
-      }),
-      expect.objectContaining({
-        priceOptionId: null,
-        priceOptionName: null,
-        unitPriceMinor: 9000,
-        quantity: 1,
-      }),
-    ]);
+    expect(order.items).toHaveLength(2);
+    expect(order.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          priceOptionId: null,
+          priceOptionName: "Large",
+          unitPriceMinor: 11000,
+          quantity: 1,
+        }),
+        expect.objectContaining({
+          priceOptionId: null,
+          priceOptionName: null,
+          unitPriceMinor: 9000,
+          quantity: 1,
+        }),
+      ]),
+    );
     expect(order.totalMinor).toBe(20000);
   });
 
