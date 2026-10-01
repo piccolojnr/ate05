@@ -12,9 +12,11 @@ if (-not (Test-Path -LiteralPath $exe) -or $pdb.Count -ne 1 -or $nsis.Count -ne 
   throw 'Expected the Windows executable, application PDB, NSIS installer, and MSI installer.'
 }
 
+$sourceCommit = & git rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Cannot determine the application source commit.' }
 $identity = @(
-  "commit=$env:GITHUB_SHA"
-  "ref=$env:GITHUB_REF_NAME"
+  "commit=$sourceCommit"
+  "ref=$(if ($env:ATE05_RELEASE_TAG) { $env:ATE05_RELEASE_TAG } else { $env:GITHUB_REF_NAME })"
   "run=$env:GITHUB_RUN_ID"
   "pdb_file=$($pdb[0].Name)"
   "pdb_sha256=$((Get-FileHash -LiteralPath $pdb[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
@@ -26,6 +28,7 @@ $identity = @(
 )
 
 if ($RequireSigning) {
+  if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Signed verification trusts a public certificate and must run on a disposable GitHub Actions runner.' }
   # Trust only the public certificate from the existing signing step, on this
   # disposable CI runner. Never export or log its private key or PFX material.
   $certificates = @(Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq 'CN=RiTech' -and $_.HasPrivateKey })
@@ -33,11 +36,15 @@ if ($RequireSigning) {
   $publicCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
     $certificates[0].Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert)
   )
-  $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'CurrentUser')
+  # CurrentUser Root installation can display a confirmation dialog, which is
+  # invisible in CI. The elevated disposable runner's machine store is noninteractive.
+  Write-Host 'Trusting the public RiTech certificate on the disposable CI runner.'
+  $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
   try {
     $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
     $store.Add($publicCertificate)
   } finally { $store.Close() }
+  Write-Host 'Public certificate trust initialized; verifying signed artifacts.'
 
 }
 
