@@ -31,7 +31,7 @@ jobs:
 
       - name: Check required configuration presence
         env:
-          ATE05_GOOGLE_CLIENT_ID: ${{ vars.ATE05_GOOGLE_CLIENT_ID }}
+          ATE05_GOOGLE_CLIENT_ID: ${{ vars.ATE05_GOOGLE_CLIENT_ID || secrets.ATE05_GOOGLE_CLIENT_ID }}
           ATE05_GOOGLE_CLIENT_SECRET: ${{ secrets.ATE05_GOOGLE_CLIENT_SECRET }}
         run: |
           node --input-type=module <<'JS'
@@ -165,7 +165,7 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ATE05_GOOGLE_CLIENT_ID: ${{ vars.ATE05_GOOGLE_CLIENT_ID }}
+          ATE05_GOOGLE_CLIENT_ID: ${{ vars.ATE05_GOOGLE_CLIENT_ID || secrets.ATE05_GOOGLE_CLIENT_ID }}
           ATE05_GOOGLE_CLIENT_SECRET: ${{ secrets.ATE05_GOOGLE_CLIENT_SECRET }}
         with:
           projectPath: apps/pos

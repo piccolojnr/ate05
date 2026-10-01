@@ -40,6 +40,8 @@ In the GitHub repository, open **Settings → Secrets and variables → Actions*
 1. Under **Variables**, create repository variable `ATE05_GOOGLE_CLIENT_ID`.
 2. Under **Secrets**, create repository secret `ATE05_GOOGLE_CLIENT_SECRET`.
 
+If `ATE05_GOOGLE_CLIENT_ID` already exists as a repository secret, the workflow reuses it when the variable is absent; do not create a duplicate. The client secret is always read from repository Secrets, never Variables.
+
 Use the two fields from the same Google **Desktop app** OAuth client. Do not store access or refresh tokens in GitHub. Confirm the Drive API is enabled and the consent screen audience/publishing status is appropriate for production. While the consent screen is in testing, only allowed test users can authorize; this is not a production acceptance substitute.
 
 The release workflow checks only presence and fails before any build job if either setting is empty or whitespace. Values are scoped to the validation step and Tauri build step, not normal PR/CI. They are not written to configuration files or diagnostic manifests. The compiled desktop executable necessarily contains the client configuration.
