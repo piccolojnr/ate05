@@ -173,9 +173,9 @@ jobs:
           tagName: ${{ steps.source.outputs.tag }}
           releaseName: ${{ steps.source.outputs.tag != '' && format('ATE05 POS {0}', steps.source.outputs.tag) || '' }}
           releaseBody: |
-            ## ATE05 POS 0.2.1 RC.4
+            ## ATE05 POS 0.2.1 RC.5
 
-            This release candidate includes a Windows startup reliability fix, improved backup reliability, better Windows crash diagnostics and symbol support, and the previous 0.2.1 printer and setup improvements. Kitchen tickets and customer receipts have been tested successfully on physical printers.
+            This release candidate configures Google Drive sign-in for official packaged builds. It retains the Windows startup and backup reliability fixes, crash diagnostics, and previous 0.2.1 printer and setup improvements. RC.4 startup and printing smoke tests passed on Windows; RC.5 requires Google Drive connection, restart persistence, and backup upload acceptance.
 
             On Windows, download the x64 setup EXE below, run the installer, and launch ATE05 POS. Existing POS data should open normally; a fresh installation opens the setup wizard. Keep a separate backup of your data.
 
@@ -183,7 +183,7 @@ jobs:
 
             Cloud backups are not encrypted by ATE05. Protect the Google account and exported backup files.
 
-            Final Windows regression testing is required before stable 0.2.1 approval.
+            Google Drive acceptance and Windows regression testing are required before stable 0.2.1 approval.
           releaseDraft: false
           prerelease: ${{ contains(steps.source.outputs.tag, '-rc.') }}
           generateReleaseNotes: false
