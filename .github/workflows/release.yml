@@ -50,6 +50,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          components: rustfmt
           targets: ${{ matrix.os == 'macos-15-intel' && 'x86_64-apple-darwin' || matrix.os == 'macos-14' && 'aarch64-apple-darwin' || '' }}
 
       - name: Install Linux dependencies
@@ -60,6 +61,14 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify Windows native startup regression
+        if: matrix.os == 'windows-latest'
+        working-directory: apps/pos/src-tauri
+        run: |
+          cargo fmt --check
+          cargo check --locked
+          cargo test --locked -- --test-threads=1
 
       - name: Import Windows signing certificate
         if: matrix.os == 'windows-latest' && vars.WINDOWS_CODE_SIGNING_ENABLED == 'true'
@@ -88,6 +97,13 @@ jobs:
             Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Preserve Windows crash symbols
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          "CARGO_PROFILE_RELEASE_DEBUG=limited" | Add-Content -LiteralPath $env:GITHUB_ENV
+          "CARGO_PROFILE_RELEASE_STRIP=none" | Add-Content -LiteralPath $env:GITHUB_ENV
+
       - name: Build and publish Tauri bundles
         uses: tauri-apps/tauri-action@v1
         env:
@@ -114,3 +130,34 @@ jobs:
           generateReleaseNotes: true
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: "ate05-[platform]-[arch]-[bundle]"
+
+      - name: Record Windows executable identity
+        if: matrix.os == 'windows-latest' && !cancelled()
+        shell: pwsh
+        run: |
+          $exe = 'apps/pos/src-tauri/target/release/ate05-pos.exe'
+          $pdb = @(Get-ChildItem -LiteralPath 'apps/pos/src-tauri/target/release' -Filter '*.pdb' |
+            Where-Object { $_.BaseName -in @('ate05-pos', 'ate05_pos') })
+          if (-not (Test-Path -LiteralPath $exe) -or $pdb.Count -ne 1) {
+            throw 'The Windows executable or PDB was not produced.'
+          }
+          @(
+            "commit=$env:GITHUB_SHA"
+            "ref=$env:GITHUB_REF_NAME"
+            "exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant())"
+            "pdb_file=$($pdb[0].Name)"
+            "pdb_sha256=$((Get-FileHash -LiteralPath $pdb[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
+            "rustc=$(& rustc --version)"
+          ) | Set-Content -LiteralPath 'apps/pos/src-tauri/target/release/windows-symbols.txt' -Encoding utf8
+
+      - name: Retain Windows crash-analysis symbols
+        if: matrix.os == 'windows-latest' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ate05-windows-x64-crash-symbols-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            apps/pos/src-tauri/target/release/ate05-pos.exe
+            apps/pos/src-tauri/target/release/ate05*.pdb
+            apps/pos/src-tauri/target/release/windows-symbols.txt

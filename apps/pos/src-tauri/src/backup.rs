@@ -213,7 +213,9 @@ fn unhex(value: &str) -> Result<Vec<u8>, BackupError> {
 fn sha256_file(path: &Path) -> Result<String, BackupError> {
     let mut file = fs::File::open(path).map_err(|e| BackupError::Disk(e.to_string()))?;
     let mut hash = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
+    // Allocate directly on the heap: this function runs on the Windows main
+    // thread during automatic backup, whose default stack is only 1 MiB.
+    let mut buffer = vec![0u8; 1024 * 1024];
     loop {
         let count = file
             .read(&mut buffer)
@@ -1085,6 +1087,9 @@ pub async fn ensure_daily(pool: &SqlitePool, backups_dir: &Path) -> Result<Backu
             if let Ok(verified) =
                 verify_named_with_key(backups_dir, &existing.file_name, None).await
             {
+                crate::startup_log::event(
+                    "automatic backup creation skipped: today's backup verified",
+                );
                 return Ok(verified);
             }
         }
@@ -1257,6 +1262,32 @@ async fn verify_encrypted_with_staging(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_hashing_fits_a_small_windows_stack_and_handles_chunk_boundaries() {
+        let directory = root();
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("hash-input");
+        let payload = vec![0x5au8; 1024 * 1024 + 37];
+        fs::write(&path, &payload).unwrap();
+        let expected = format!("{:x}", Sha256::digest(&payload));
+        let input = path.clone();
+        let actual = std::thread::Builder::new()
+            .name("small-stack-backup-hash".into())
+            .stack_size(256 * 1024)
+            .spawn(move || sha256_file(&input).unwrap())
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(actual, expected);
+        fs::write(&path, b"").unwrap();
+        assert_eq!(
+            sha256_file(&path).unwrap(),
+            format!("{:x}", Sha256::digest(b""))
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     fn root() -> PathBuf {
         std::env::temp_dir().join(format!("ate05-backup-{}", Uuid::new_v4()))
     }

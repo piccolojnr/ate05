@@ -1,7 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serializeClient } from "./serialize-client";
 
 describe("native operation serialization", () => {
+  beforeEach(() => {
+    // Node 22 has no Web Locks API. Model exclusive FIFO locks for these tests.
+    const queues = new Map<string, Promise<unknown>>();
+    vi.stubGlobal("navigator", {
+      locks: {
+        request(name: string, callback: () => unknown) {
+          const result = (queues.get(name) ?? Promise.resolve()).then(callback);
+          queues.set(
+            name,
+            result.catch(() => undefined),
+          );
+          return result;
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("keeps reads and writes outside another client's transaction", async () => {
     const events: string[] = [];
     let release!: () => void;

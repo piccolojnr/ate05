@@ -13,6 +13,7 @@ mod database;
 mod device;
 mod drive;
 mod printing;
+mod startup_log;
 use printing::PrinterRequest;
 
 #[derive(Debug, Deserialize)]
@@ -324,7 +325,12 @@ async fn test_printer(request: PrinterRequest, created_at: String) -> Result<(),
 }
 
 fn main() {
-    tauri::Builder::default()
+    startup_log::initialize();
+    startup_log::event("process/main entered");
+    startup_log::event(concat!("application version=", env!("CARGO_PKG_VERSION")));
+    startup_log::event("Tauri builder initialization started");
+    startup_log::event("SQL/migration initialization started");
+    let application = tauri::Builder::default()
         .manage(auth::AuthSession::default())
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -391,17 +397,28 @@ fn main() {
         )
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            startup_log::event("SQL/migration initialization completed");
+            startup_log::event("setup entered");
             // Migrations have completed in the SQL plugin's preload setup.
             // Keep every statement of renderer-managed transactions on one connection.
-            tauri::async_runtime::block_on(async {
+            startup_log::event("database connection started");
+            let database_result = tauri::async_runtime::block_on(async {
                 let pool =
-                    database::connect(&app.path().app_config_dir()?.join("ate05.db")).await?;
+                    database::connect(&app.path().app_config_dir()?.join("ate05.db")).await
+                        .map_err(|error| {
+                            startup_log::event("database connection failed");
+                            error
+                        })?;
+                startup_log::event("database connection completed");
+                startup_log::event("database health check started");
                 let health = backup::health(&pool).await;
                 if !health.healthy {
+                    startup_log::event("database health check failed");
                     return Err(
                         format!("ATE05 database recovery is required: {}", health.message).into(),
                     );
                 }
+                startup_log::event("database health check completed");
                 let instances = app.state::<tauri_plugin_sql::DbInstances>();
                 let previous = instances.0.write().await.insert(
                     "sqlite:ate05.db".into(),
@@ -411,14 +428,21 @@ fn main() {
                     pool.close().await;
                 }
                 Ok::<_, Box<dyn std::error::Error>>(())
-            })?;
+            });
+            if database_result.is_err() {
+                startup_log::event("database startup failed");
+            }
+            database_result?;
             let data_dir = app.path().app_data_dir()?;
             let backups_dir = data_dir.join("backups");
             if let Err(error) = fs::create_dir_all(&backups_dir) {
+                startup_log::event("automatic backup failed: backup directory unavailable");
+                startup_log::event("credential-store/Drive status skipped: backup directory unavailable");
                 eprintln!(
                     "[ATE05] automatic backup warning: backup folder is unavailable ({error})"
                 );
             } else {
+                startup_log::event("automatic backup started");
                 let automatic_result = tauri::async_runtime::block_on(async {
                     let instances = app.state::<tauri_plugin_sql::DbInstances>();
                     let pool = {
@@ -431,27 +455,49 @@ fn main() {
                     backup::ensure_daily(&pool, &backups_dir).await
                 });
                 if let Err(error) = automatic_result {
+                    startup_log::event("automatic backup failed");
+                    startup_log::event("credential-store/Drive status skipped: local backup failed");
                     eprintln!("[ATE05] automatic backup warning: {error}");
-                } else if tauri::async_runtime::block_on(drive::status())
-                    .map(|status| status.connected && status.automatic_enabled)
-                    .unwrap_or(false)
-                {
-                    tauri::async_runtime::spawn(async move {
-                        if let Ok(files) = backup::list(&backups_dir).await {
-                            if let Some(file) =
-                                files.into_iter().find(|file| file.kind == "automatic")
-                            {
-                                let path = backups_dir.join(&file.file_name);
-                                let result = drive::upload_backup_file(&path).await;
-                                let _ = drive::record_upload(&path.to_string_lossy(), result).await;
+                } else {
+                    startup_log::event("automatic backup completed");
+                    startup_log::event("credential-store/Drive status started");
+                    let upload = match tauri::async_runtime::block_on(drive::status()) {
+                        Ok(status) => {
+                            if matches!(status.status.as_str(), "credential_store_unavailable" | "needs_attention" | "drive_unavailable" | "authorization_required") {
+                                startup_log::event("credential-store/Drive status failed");
+                            } else {
+                                startup_log::event("credential-store/Drive status completed");
                             }
+                            status.connected && status.automatic_enabled
                         }
-                    });
+                        Err(_) => {
+                            startup_log::event("credential-store/Drive status failed");
+                            false
+                        }
+                    };
+                    if upload {
+                        tauri::async_runtime::spawn(async move {
+                            startup_log::event("automatic Drive upload started");
+                            if let Ok(files) = backup::list(&backups_dir).await {
+                                if let Some(file) = files.into_iter().find(|file| file.kind == "automatic") {
+                                    let path = backups_dir.join(&file.file_name);
+                                    let result = drive::upload_backup_file(&path).await;
+                                    startup_log::event(if result.is_ok() { "automatic Drive upload completed" } else { "automatic Drive upload failed" });
+                                    let _ = drive::record_upload(&path.to_string_lossy(), result).await;
+                                    return;
+                                }
+                            }
+                            startup_log::event("automatic Drive upload skipped: no usable backup");
+                        });
+                    } else {
+                        startup_log::event("automatic Drive upload skipped");
+                    }
                 }
             }
             if let Err(error) = fs::create_dir_all(data_dir.join("logs")) {
                 eprintln!("[ATE05] local logging warning: log folder is unavailable ({error})");
             }
+            startup_log::event("setup completed");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -488,8 +534,21 @@ fn main() {
             device::remember_staff,
             device::forget_remembered_staff
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running ATE05 POS");
+        .build(tauri::generate_context!());
+    match application {
+        Ok(application) => {
+            startup_log::event("Tauri builder initialization completed");
+            application.run(|_, event| {
+                if matches!(event, tauri::RunEvent::Ready) {
+                    startup_log::runtime_ready();
+                }
+            });
+        }
+        Err(_) => {
+            startup_log::event("Tauri builder/runtime startup failed");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn native_paths(
