@@ -21,7 +21,7 @@ remain the evidence for native failures.
 
 Every Windows CI or release workflow run retains a crash-analysis CI artifact
 named `ate05-windows-x64-crash-symbols-<commit>`. It contains the release
-`ate05-pos.exe`, its application PDB, and `windows-symbols.txt` with the commit,
+`ate05-pos.exe`, its application PDB, and an identity manifest with the commit,
 ref, compiler version, and SHA-256 hashes. Cargo release builds retain limited
 debug information and do not strip symbols. The PDB is kept in CI for 90 days;
 archive it with your release records before it expires. It is not added to the
@@ -30,7 +30,7 @@ installer or GitHub release assets.
 1. Identify the release tag and commit used to create the installed executable.
 2. Download the crash-symbol artifact from that commit's GitHub Actions run.
 3. Compare the installed executable's SHA-256 with `exe_sha256` in
-   `windows-symbols.txt`:
+   `windows-build-identity.txt` (branch CI) or `windows-symbols.txt` (release CI):
 
    ```powershell
    Get-FileHash "$env:LOCALAPPDATA\ATE05 POS\ate05-pos.exe" -Algorithm SHA256

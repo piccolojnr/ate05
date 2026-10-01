@@ -94,11 +94,19 @@ jobs:
         working-directory: apps/pos/src-tauri
         shell: pwsh
         run: |
-          $result = cargo test --locked -- --test-threads=1
-          if ($LASTEXITCODE -ne 0) {
-            throw 'The Windows Rust test suite failed.'
-          }
-          if ($result -notmatch 'backup::tests::file_hashing_fits_a_small_windows_stack_and_handles_chunk_boundaries\s+\.\.\. ok') {
+          cargo test --locked -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'The Windows Rust test suite failed.' }
+
+      - name: Small-stack SHA-256 regression (Windows)
+        if: matrix.os == 'windows-latest'
+        working-directory: apps/pos/src-tauri
+        shell: pwsh
+        run: |
+          $result = @(cargo test --locked backup::tests::file_hashing_fits_a_small_windows_stack_and_handles_chunk_boundaries -- --exact --nocapture)
+          $testExitCode = $LASTEXITCODE
+          $result | Write-Output
+          if ($testExitCode -ne 0) { throw 'The Windows small-stack SHA-256 regression test failed.' }
+          if (($result -join "`n") -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored;') {
             throw 'The Windows small-stack SHA-256 regression test did not execute successfully.'
           }
           Write-Output 'Windows small-stack SHA-256 regression test passed.'
@@ -171,7 +179,7 @@ jobs:
           ) | Set-Content -LiteralPath (Join-Path $releaseDir 'windows-build-identity.txt') -Encoding utf8
 
       - name: Retain Windows installers
-        if: matrix.os == 'windows-latest' && !cancelled()
+        if: matrix.os == 'windows-latest' && success()
         uses: actions/upload-artifact@v4
         with:
           name: ate05-windows-x64-installers-${{ github.sha }}
@@ -182,7 +190,7 @@ jobs:
             apps/pos/src-tauri/target/release/bundle/msi/*.msi
 
       - name: Retain Windows crash-analysis symbols
-        if: matrix.os == 'windows-latest' && !cancelled()
+        if: matrix.os == 'windows-latest' && success()
         uses: actions/upload-artifact@v4
         with:
           name: ate05-windows-x64-crash-symbols-${{ github.sha }}
