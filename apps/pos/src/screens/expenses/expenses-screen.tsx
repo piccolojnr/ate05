@@ -1,3 +1,4 @@
+import { ExpenseReportView } from "./expense-report";
 import {
   useCallback,
   useEffect,
@@ -219,6 +220,7 @@ export function ExpensesScreen({ client }: { client: ExpensesClient }) {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [view, setView] = useState<"records" | "report">("records");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All categories");
   const [editor, setEditor] = useState<{
@@ -291,139 +293,202 @@ export function ExpensesScreen({ client }: { client: ExpensesClient }) {
           Add expense
         </Button>
       </header>
-      <div className="overflow-hidden rounded-xl border bg-card">
-        <div className="flex flex-wrap items-center gap-3 border-b p-4">
-          <Input
-            aria-label="Search expenses"
-            placeholder="Search descriptions…"
-            className="max-w-xs shadow-none"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-          <div className="w-44 shrink-0">
-            <Select
-              aria-label="Filter expense category"
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-            >
-              <option>All categories</option>
-              {expenseCategories.map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </Select>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={loading}
-            onClick={() => void refresh()}
+      <div
+        role="tablist"
+        aria-label="Expense views"
+        className="flex gap-6 border-b"
+      >
+        {(["records", "report"] as const).map((value) => (
+          <button
+            key={value}
+            id={`expense-${value}-tab`}
+            role="tab"
+            type="button"
+            aria-selected={view === value}
+            aria-controls={`expense-${value}-panel`}
+            tabIndex={view === value ? 0 : -1}
+            onClick={() => setView(value)}
+            onKeyDown={(event) => {
+              if (
+                !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+              )
+                return;
+              event.preventDefault();
+              const next =
+                event.key === "Home"
+                  ? "records"
+                  : event.key === "End"
+                    ? "report"
+                    : value === "records"
+                      ? "report"
+                      : "records";
+              setView(next);
+              document.getElementById(`expense-${next}-tab`)?.focus();
+            }}
+            className={`min-h-11 border-b-2 px-1 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${view === value ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
           >
-            Refresh
-          </Button>
-          {!loading && !error && (
-            <span className="ml-auto text-xs text-muted-foreground">
-              {visible.length} {visible.length === 1 ? "expense" : "expenses"}
-            </span>
+            {value === "records" ? "Records" : "Expense report"}
+          </button>
+        ))}
+      </div>
+      <div
+        id="expense-report-panel"
+        role="tabpanel"
+        aria-labelledby="expense-report-tab"
+        hidden={view !== "report"}
+      >
+        <ExpenseReportView
+          expenses={expenses}
+          active={view === "report"}
+          today={localDate()}
+          loading={loading}
+          error={error}
+          onRefresh={refresh}
+        />
+      </div>
+      <div
+        id="expense-records-panel"
+        role="tabpanel"
+        aria-labelledby="expense-records-tab"
+        hidden={view !== "records"}
+      >
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <div className="flex flex-wrap items-center gap-3 border-b p-4">
+            <Input
+              aria-label="Search expenses"
+              placeholder="Search descriptions…"
+              className="max-w-xs shadow-none"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            <div className="w-44 shrink-0">
+              <Select
+                aria-label="Filter expense category"
+                value={category}
+                onChange={(event) => setCategory(event.target.value)}
+              >
+                <option>All categories</option>
+                {expenseCategories.map((value) => (
+                  <option key={value}>{value}</option>
+                ))}
+              </Select>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={loading}
+              onClick={() => void refresh()}
+            >
+              Refresh
+            </Button>
+            {!loading && !error && (
+              <span className="ml-auto text-xs text-muted-foreground">
+                {visible.length} {visible.length === 1 ? "expense" : "expenses"}
+              </span>
+            )}
+          </div>
+          {loading ? (
+            <p
+              role="status"
+              className="p-12 text-center text-sm text-muted-foreground"
+            >
+              Loading expenses…
+            </p>
+          ) : error ? (
+            <div className="space-y-3 p-12 text-center">
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+              <Button variant="secondary" onClick={() => void refresh()}>
+                Try again
+              </Button>
+            </div>
+          ) : !visible.length ? (
+            <div className="px-6 py-16 text-center">
+              <p className="font-medium">
+                {expenses.length ? "No matching expenses" : "No expenses yet"}
+              </p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {expenses.length
+                  ? "Try another description or category."
+                  : "Add your first expense to start tracking spending."}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[640px] text-left text-sm">
+                <caption className="sr-only">
+                  Recorded expenses, newest expense date first
+                </caption>
+                <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
+                  <tr>
+                    <th scope="col" className="px-5 py-3 font-medium">
+                      Date
+                    </th>
+                    <th scope="col" className="px-5 py-3 font-medium">
+                      Description
+                    </th>
+                    <th scope="col" className="px-5 py-3 font-medium">
+                      Category
+                    </th>
+                    <th scope="col" className="px-5 py-3 font-medium">
+                      Payment
+                    </th>
+                    <th
+                      scope="col"
+                      className="px-5 py-3 text-right font-medium"
+                    >
+                      Amount
+                    </th>
+                    <th scope="col" className="px-5 py-3">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {visible.map((expense) => (
+                    <tr key={expense.id} className="hover:bg-muted/30">
+                      <td className="whitespace-nowrap px-5 py-4 text-muted-foreground">
+                        <time dateTime={expense.expenseDate}>
+                          {formatExpenseDate(expense.expenseDate)}
+                        </time>
+                      </td>
+                      <td className="max-w-xs break-words px-5 py-4 font-medium">
+                        {expense.description}
+                        {expense.version > 1 && (
+                          <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                            Edited
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-5 py-4 text-muted-foreground">
+                        {expense.category}
+                      </td>
+                      <td className="px-5 py-4 text-muted-foreground">
+                        {expensePaymentLabels[expense.paymentMethod]}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-4 text-right font-medium tabular-nums">
+                        {formatGhs(expense.amountMinor)}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Edit expense: ${expense.description}`}
+                          onClick={(event) =>
+                            setEditor({ expense, opener: event.currentTarget })
+                          }
+                        >
+                          Edit
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
-        {loading ? (
-          <p
-            role="status"
-            className="p-12 text-center text-sm text-muted-foreground"
-          >
-            Loading expenses…
-          </p>
-        ) : error ? (
-          <div className="space-y-3 p-12 text-center">
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-            <Button variant="secondary" onClick={() => void refresh()}>
-              Try again
-            </Button>
-          </div>
-        ) : !visible.length ? (
-          <div className="px-6 py-16 text-center">
-            <p className="font-medium">
-              {expenses.length ? "No matching expenses" : "No expenses yet"}
-            </p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {expenses.length
-                ? "Try another description or category."
-                : "Add your first expense to start tracking spending."}
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-sm">
-              <caption className="sr-only">
-                Recorded expenses, newest expense date first
-              </caption>
-              <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
-                <tr>
-                  <th scope="col" className="px-5 py-3 font-medium">
-                    Date
-                  </th>
-                  <th scope="col" className="px-5 py-3 font-medium">
-                    Description
-                  </th>
-                  <th scope="col" className="px-5 py-3 font-medium">
-                    Category
-                  </th>
-                  <th scope="col" className="px-5 py-3 font-medium">
-                    Payment
-                  </th>
-                  <th scope="col" className="px-5 py-3 text-right font-medium">
-                    Amount
-                  </th>
-                  <th scope="col" className="px-5 py-3">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {visible.map((expense) => (
-                  <tr key={expense.id} className="hover:bg-muted/30">
-                    <td className="whitespace-nowrap px-5 py-4 text-muted-foreground">
-                      <time dateTime={expense.expenseDate}>
-                        {formatExpenseDate(expense.expenseDate)}
-                      </time>
-                    </td>
-                    <td className="max-w-xs break-words px-5 py-4 font-medium">
-                      {expense.description}
-                      {expense.version > 1 && (
-                        <span className="mt-1 block text-xs font-normal text-muted-foreground">
-                          Edited
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-5 py-4 text-muted-foreground">
-                      {expense.category}
-                    </td>
-                    <td className="px-5 py-4 text-muted-foreground">
-                      {expensePaymentLabels[expense.paymentMethod]}
-                    </td>
-                    <td className="whitespace-nowrap px-5 py-4 text-right font-medium tabular-nums">
-                      {formatGhs(expense.amountMinor)}
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Edit expense: ${expense.description}`}
-                        onClick={(event) =>
-                          setEditor({ expense, opener: event.currentTarget })
-                        }
-                      >
-                        Edit
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
       {editor && (
         <ExpenseDialog
@@ -434,12 +499,13 @@ export function ExpensesScreen({ client }: { client: ExpensesClient }) {
             setEditor(null);
             window.requestAnimationFrame(() => opener.focus());
           }}
-          onSaved={(saved) =>
+          onSaved={(saved) => {
             setExpenses((current) => [
               saved,
               ...current.filter((entry) => entry.id !== saved.id),
-            ])
-          }
+            ]);
+            setView("records");
+          }}
         />
       )}
     </section>
