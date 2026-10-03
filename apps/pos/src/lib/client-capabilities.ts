@@ -1,3 +1,8 @@
+import type {
+  CreateExpenseInput,
+  Expense,
+  UpdateExpenseInput,
+} from "@ate05/domain";
 import type { PaperWidth } from "@ate05/printing";
 import type { MenuPriceOptionInput, PricingMode } from "@ate05/domain";
 import type {
@@ -249,4 +254,10 @@ export interface RecoveryClient {
   backupToDrive(): Promise<CloudBackupResult>;
   deleteCloudBackup(remoteId: string): Promise<void>;
   restoreCloudBackup(remoteId: string): Promise<BackupInfo>;
+}
+
+export interface ExpensesClient {
+  listExpenses(): Promise<Expense[]>;
+  createExpense(input: CreateExpenseInput): Promise<Expense>;
+  updateExpense(input: UpdateExpenseInput): Promise<Expense>;
 }

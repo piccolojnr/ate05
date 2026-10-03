@@ -2,6 +2,7 @@ export type OrderType = "dine_in" | "takeaway";
 import type { PrinterConfig } from "@ate05/printing";
 import type { MenuPriceOption, PricingMode } from "@ate05/domain";
 import type {
+  ExpensesClient,
   BootstrapClient,
   CatalogClient,
   InventoryClient,
@@ -243,6 +244,7 @@ export interface PosBootstrap {
 
 export interface PosClient
   extends
+    ExpensesClient,
     SessionClient,
     BootstrapClient,
     CatalogClient,

@@ -1,3 +1,9 @@
+import {
+  sameExpenseInput,
+  validateExpenseId,
+  validateExpenseInput,
+  type Expense,
+} from "@ate05/domain";
 import { validatePrinterInput } from "./printer-configuration";
 import type {
   KitchenTicket,
@@ -37,6 +43,7 @@ const rememberedStaffKey = "ate05-pos-browser-remembered-staff-v1";
 const staffKey = "ate05-pos-browser-staff-v1";
 
 interface PreviewState {
+  expenses?: Expense[];
   nextOrderNumber: number;
   nextReceiptNumber: number;
   orders: PosOrder[];
@@ -118,6 +125,7 @@ function readState(): PreviewState {
   state.tables ??= tables;
   state.inventory ??= [];
   state.movements ??= [];
+  state.expenses ??= [];
   state.menuCategories ??= categories.map((category) => ({
     ...category,
     active: true,
@@ -303,7 +311,7 @@ export function createBrowserPreviewClient(): PosClient {
       hasPin,
     }));
   const previewPermissions = (role: string) =>
-    role === "owner"
+    role === "owner" || role === "manager"
       ? [
           "pos",
           "orders",
@@ -316,6 +324,7 @@ export function createBrowserPreviewClient(): PosClient {
           "printers",
           "backup",
           "inventory_adjustment",
+          "expenses",
         ]
       : role === "kitchen"
         ? ["pos", "orders", "kitchen", "inventory"]
@@ -1249,6 +1258,77 @@ export function createBrowserPreviewClient(): PosClient {
       throw new Error(
         "Google Drive restore is available in the native desktop app only.",
       );
+    },
+    async listExpenses() {
+      requirePermission("expenses");
+      return readState()
+        .expenses!.filter(
+          (expense) => expense.businessId === session!.businessId,
+        )
+        .sort(
+          (a, b) =>
+            b.expenseDate.localeCompare(a.expenseDate) ||
+            b.createdAt.localeCompare(a.createdAt) ||
+            b.id.localeCompare(a.id),
+        );
+    },
+    async createExpense(input) {
+      requirePermission("expenses");
+      validateExpenseId(input.id);
+      const values = validateExpenseInput(input);
+      const state = readState();
+      const existing = state.expenses!.find(
+        (expense) => expense.id === input.id,
+      );
+      if (existing) {
+        if (
+          existing.businessId === session!.businessId &&
+          existing.createdBy === actorId() &&
+          sameExpenseInput(existing, values)
+        )
+          return existing;
+        throw new Error(
+          "This expense reference has already been used. Reopen Expenses before trying again.",
+        );
+      }
+      const now = new Date().toISOString();
+      const expense: Expense = {
+        ...values,
+        id: input.id,
+        businessId: session!.businessId,
+        createdBy: actorId(),
+        updatedBy: actorId(),
+        createdAt: now,
+        updatedAt: now,
+        version: 1,
+      };
+      state.expenses!.push(expense);
+      writeState(state);
+      return expense;
+    },
+    async updateExpense(input) {
+      requirePermission("expenses");
+      validateExpenseId(input.id);
+      const values = validateExpenseInput(input);
+      if (!Number.isSafeInteger(input.version) || input.version < 1)
+        throw new Error("Expense version is invalid.");
+      const state = readState();
+      const expense = state.expenses!.find(
+        (entry) =>
+          entry.id === input.id && entry.businessId === session!.businessId,
+      );
+      if (!expense) throw new Error("Expense not found.");
+      if (expense.version !== input.version)
+        throw new Error(
+          "This expense has changed. Close this form and refresh Expenses before editing again.",
+        );
+      Object.assign(expense, values, {
+        updatedBy: actorId(),
+        updatedAt: new Date().toISOString(),
+        version: expense.version + 1,
+      });
+      writeState(state);
+      return expense;
     },
     async listInventory() {
       return readState().inventory.map(refreshInventory);

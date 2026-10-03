@@ -7,6 +7,7 @@ export type IconName =
   | "kitchen"
   | "menu"
   | "inventory"
+  | "expenses"
   | "settings"
   | "search"
   | "plus"
@@ -57,6 +58,14 @@ export function Icon({
     inventory: (
       <>
         <path {...common} d="M4 8 12 4l8 4-8 4zM4 8v8l8 4 8-4V8M12 12v8" />
+      </>
+    ),
+    expenses: (
+      <>
+        <path
+          {...common}
+          d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 7h6M9 11h6M9 15h3"
+        />
       </>
     ),
     settings: (

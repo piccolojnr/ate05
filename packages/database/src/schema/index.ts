@@ -9,3 +9,4 @@ export * from "./printers";
 export * from "./print-attempts";
 export * from "./seating";
 export * from "./users";
+export * from "./expenses";

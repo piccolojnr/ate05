@@ -59,6 +59,7 @@ pub fn permissions(role: &str) -> Vec<String> {
             "printers",
             "backup",
             "inventory_adjustment",
+            "expenses",
         ],
         "cashier" => vec!["pos", "orders", "tables"],
         "kitchen" => vec!["pos", "orders", "kitchen", "inventory"],

@@ -112,8 +112,15 @@ jobs:
         working-directory: apps/pos/src-tauri
         shell: pwsh
         run: |
-          cargo test --locked -- --test-threads=1
-          if ($LASTEXITCODE -ne 0) { throw 'The Windows Rust test suite failed.' }
+          $result = @(cargo test --locked -- --test-threads=1 2>&1)
+          $testExitCode = $LASTEXITCODE
+          $result | Write-Output
+          if ($testExitCode -ne 0) {
+            $details = ($result | Select-Object -Last 120 | ForEach-Object { "$_" }) -join "`n"
+            $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows Rust test failure::$details"
+            throw 'The Windows Rust test suite failed.'
+          }
 
       - name: Small-stack SHA-256 regression (Windows)
         if: matrix.os == 'windows-latest'
