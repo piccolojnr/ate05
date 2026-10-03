@@ -100,6 +100,16 @@ impl MigrationSource<'static> for Ate05Migrations {
                     .into(),
                     false,
                 ),
+                Migration::new(
+                    8,
+                    "expense_recording".into(),
+                    MigrationType::ReversibleUp,
+                    include_str!(
+                        "../../../../packages/database/drizzle/0007_smiling_multiple_man.sql"
+                    )
+                    .into(),
+                    false,
+                ),
             ])
         })
     }
@@ -396,7 +406,7 @@ mod tests {
                 .fetch_one(&migrated)
                 .await
                 .unwrap();
-            assert_eq!(version, 7);
+            assert_eq!(version, 8);
             assert_eq!(
                 sqlx::query_scalar::<_, String>(
                     "SELECT pricing_mode FROM menu_items WHERE id = 'migration-item'"

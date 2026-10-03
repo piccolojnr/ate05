@@ -117,7 +117,7 @@ describe("installed printer queue persistence", () => {
         database.sqlite
           .prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"')
           .get(),
-      ).toEqual({ count: 7 });
+      ).toEqual({ count: 8 });
       expect(
         database.sqlite
           .prepare(

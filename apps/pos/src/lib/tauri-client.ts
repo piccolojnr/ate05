@@ -1,3 +1,4 @@
+import { expensePersistence } from "./expense-persistence";
 import Database from "@tauri-apps/plugin-sql";
 import { serializeClient } from "./serialize-client";
 import {
@@ -2389,6 +2390,69 @@ export function createTauriClient(): PosClient {
     async restoreCloudBackup(remoteId) {
       requirePermission("backup");
       return await invoke<BackupInfo>("restore_cloud_backup", { remoteId });
+    },
+    async listExpenses() {
+      requirePermission("expenses");
+      const db = await database();
+      return expensePersistence(
+        {
+          query: async (sql, values) => {
+            try {
+              return await db.select(sql, values);
+            } catch {
+              throw new PosClientError(
+                "database",
+                "Unable to load expenses from the local database. Please try again.",
+              );
+            }
+          },
+          execute: (sql, values) => execute(db, sql, values),
+        },
+        currentUser!.businessId,
+        actorId(),
+      ).list();
+    },
+    async createExpense(input) {
+      requirePermission("expenses");
+      const db = await database();
+      return expensePersistence(
+        {
+          query: async (sql, values) => {
+            try {
+              return await db.select(sql, values);
+            } catch {
+              throw new PosClientError(
+                "database",
+                "Unable to load expenses from the local database. Please try again.",
+              );
+            }
+          },
+          execute: (sql, values) => execute(db, sql, values),
+        },
+        currentUser!.businessId,
+        actorId(),
+      ).create(input);
+    },
+    async updateExpense(input) {
+      requirePermission("expenses");
+      const db = await database();
+      return expensePersistence(
+        {
+          query: async (sql, values) => {
+            try {
+              return await db.select(sql, values);
+            } catch {
+              throw new PosClientError(
+                "database",
+                "Unable to load expenses from the local database. Please try again.",
+              );
+            }
+          },
+          execute: (sql, values) => execute(db, sql, values),
+        },
+        currentUser!.businessId,
+        actorId(),
+      ).update(input);
     },
     async listInventory() {
       return listInventoryRows(await database());

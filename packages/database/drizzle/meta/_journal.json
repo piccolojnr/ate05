@@ -50,6 +50,13 @@
       "when": 1790726400000,
       "tag": "0006_system_printer_queues",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791055572167,
+      "tag": "0007_smiling_multiple_man",
+      "breakpoints": true
     }
   ]
 }

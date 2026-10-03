@@ -21,7 +21,7 @@ use uuid::Uuid;
 pub const BACKUP_FORMAT_VERSION: u32 = 2;
 const PLAIN_BACKUP_FORMAT_VERSION: u32 = 3;
 const LEGACY_FORMAT_VERSION: u32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 7;
+const CURRENT_SCHEMA_VERSION: i64 = 8;
 const AUTOMATIC_RETENTION: usize = 14;
 const MAGIC: &[u8; 8] = b"ATE05BK\0";
 const SERVICE: &str = "com.ate05.pos";

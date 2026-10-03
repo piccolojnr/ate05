@@ -391,6 +391,12 @@ fn main() {
                             sql: include_str!("../../../../packages/database/drizzle/0006_system_printer_queues.sql"),
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 8,
+                            description: "expense_recording",
+                            sql: include_str!("../../../../packages/database/drizzle/0007_smiling_multiple_man.sql"),
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),
