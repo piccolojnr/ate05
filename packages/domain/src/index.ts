@@ -7,3 +7,4 @@ export * from "./seating";
 export * from "./money";
 export * from "./shared";
 export * from "./expenses";
+export * from "./expense-reporting";

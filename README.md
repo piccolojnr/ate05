@@ -58,6 +58,11 @@ Desktop entries persist in local SQLite and are included in database backups.
 Browser preview entries use the existing local-storage preview adapter. Expense
 entries do not automatically change inventory quantities or record order payments.
 
+The **Expense report** tab shows total spending and category totals for today,
+the current week (Monday–Sunday), the current calendar month, or an inclusive
+custom date range. Reports use the expense date, include corrected entries, and
+remain independent of search and category filters in the Records tab.
+
 ## Local database development
 
 SQLite is the initial local source of truth. The database package stores GHS values as integer pesewas, UTC ISO timestamps, and application-generated string IDs. Its checked-in Drizzle migrations create business-scoped records for staff, menu, seating, orders, kitchen tickets, payments/receipts, inventory, and stock movements.
