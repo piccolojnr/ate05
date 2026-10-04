@@ -37,6 +37,9 @@ const rememberedStaffKey = "ate05-pos-browser-remembered-staff-v1";
 const staffKey = "ate05-pos-browser-staff-v1";
 
 interface PreviewState {
+  revenuePayments?: Array<
+    import("@ate05/domain").RevenuePayment & Partial<PosPayment>
+  >;
   nextOrderNumber: number;
   nextReceiptNumber: number;
   orders: PosOrder[];
@@ -184,7 +187,7 @@ function refreshOrder(order: PosOrder): PosOrder {
     order.receipt?.payments.reduce(
       (sum, payment) => sum + payment.amountMinor,
       0,
-    ) ?? 0;
+    ) ?? order.amountPaidMinor;
   return {
     ...order,
     subtotalMinor,
@@ -316,6 +319,7 @@ export function createBrowserPreviewClient(): PosClient {
           "printers",
           "backup",
           "inventory_adjustment",
+          "reports",
         ]
       : role === "kitchen"
         ? ["pos", "orders", "kitchen", "inventory"]
@@ -1076,14 +1080,38 @@ export function createBrowserPreviewClient(): PosClient {
       )
         throw new Error("Kitchen ticket not found.");
     },
+    async listRevenuePayments() {
+      requirePermission("reports");
+      const state = readState();
+      return (
+        state.revenuePayments ??
+        state.orders.flatMap((order) =>
+          (order.receipt?.payments ?? []).map((payment) => ({
+            ...payment,
+            id: payment.id,
+            orderId: order.id,
+            amountMinor: payment.amountMinor,
+            method: payment.method,
+            status: "recorded" as const,
+            receivedAt: order.receipt!.issuedAt,
+            orderPaid: order.paymentStatus === "paid",
+            estimatedDate: true,
+          })),
+        )
+      );
+    },
     async recordPayment(input) {
       const state = readState();
       const order = state.orders.find((entry) => entry.id === input.orderId);
       if (!order) throw new Error("Order not found.");
       order.receipt ??= null;
-      const existingPayment = order.receipt?.payments.find(
-        (payment) => payment.id === input.idempotencyKey,
-      );
+      const existingPayment =
+        state.revenuePayments?.find(
+          (entry) => entry.id === input.idempotencyKey,
+        ) ??
+        order.receipt?.payments.find(
+          (payment) => payment.id === input.idempotencyKey,
+        );
       if (existingPayment) return order;
       const paid = order.amountPaidMinor;
       const due = Math.max(0, order.totalMinor - paid);
@@ -1103,12 +1131,48 @@ export function createBrowserPreviewClient(): PosClient {
         cashTenderedMinor: tendered,
         changeMinor: tendered === null ? null : tendered - input.amountMinor,
       };
-      const payments = [...(order.receipt?.payments ?? []), payment];
+      state.revenuePayments ??= state.orders.flatMap((entry) =>
+        (entry.receipt?.payments ?? []).map((prior) => ({
+          ...prior,
+          id: prior.id,
+          orderId: entry.id,
+          amountMinor: prior.amountMinor,
+          method: prior.method,
+          status: "recorded" as const,
+          receivedAt: entry.receipt!.issuedAt,
+          orderPaid: entry.paymentStatus === "paid",
+          estimatedDate: true,
+        })),
+      );
+      state.revenuePayments.push({
+        ...payment,
+        id: payment.id,
+        orderId: order.id,
+        amountMinor: payment.amountMinor,
+        method: payment.method,
+        status: "recorded",
+        receivedAt: new Date().toISOString(),
+        orderPaid: false,
+      });
+      const payments: PosPayment[] = state.revenuePayments
+        .filter((entry) => entry.orderId === order.id)
+        .map((entry) => ({
+          id: entry.id,
+          amountMinor: entry.amountMinor,
+          method: entry.method,
+          reference: entry.reference ?? null,
+          cashTenderedMinor: entry.cashTenderedMinor ?? null,
+          changeMinor: entry.changeMinor ?? null,
+        }));
       const amountPaidMinor = paid + input.amountMinor;
       order.amountPaidMinor = amountPaidMinor;
       order.amountDueMinor = Math.max(0, order.totalMinor - amountPaidMinor);
       order.paymentStatus =
         order.amountDueMinor === 0 ? "paid" : "partially_paid";
+      for (const entry of state.revenuePayments) {
+        if (entry.orderId === order.id)
+          entry.orderPaid = order.paymentStatus === "paid";
+      }
       if (order.amountDueMinor === 0) {
         order.receipt = {
           id: order.receipt?.id ?? crypto.randomUUID(),

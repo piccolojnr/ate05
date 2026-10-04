@@ -228,6 +228,10 @@ export interface PrintingClient {
   reprintReceipt(orderId: string): Promise<void>;
 }
 
+export interface ReportsClient {
+  listRevenuePayments(): Promise<import("@ate05/domain").RevenuePayment[]>;
+}
+
 export interface SettingsClient {
   /** Marker for the future standalone settings capability. */
   readonly __settingsClient?: never;
