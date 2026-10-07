@@ -77,3 +77,16 @@ once Windows has installed them as printers; no network address or port is
 needed. Printing is post-commit: printer failures leave documents persisted and
 retryable. Direct USB transport and cash drawers remain deferred. See the
 [staff printer setup and troubleshooting guide](docs/printer-configuration.md).
+
+## Order history
+
+The Orders page defaults to orders opened during the current Monday–Sunday week,
+including active and completed orders, grouped by day with newest orders first.
+The exact week boundaries and each selected order's opening date/time are shown
+in Ghana time (UTC). Use Previous week/Next week, Custom dates (inclusive), or
+All dates to browse older orders. Search and status filters apply within the
+selected dates; counts reflect that period and the due amount reflects the
+visible orders. A notice links to all active orders when unfinished orders fall
+outside the chosen range. Orders with unknown opening dates remain discoverable
+under All dates. The change uses existing persisted order timestamps and needs
+no schema migration.

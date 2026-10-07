@@ -1,9 +1,17 @@
-import { useMemo, useState } from "react";
-import { Badge, Button, Card, Input } from "@ate05/ui";
+import { useState } from "react";
+import { Badge, Button, Card, Input, Select } from "@ate05/ui";
 import { Icon } from "../../components/icons";
 import { PageHeader } from "../../components/page-header";
 import { StatusBadge } from "../../components/status-badge";
 import { formatGhs, type OpenOrder } from "../../lib/pos-client";
+
+import {
+  orderWeek,
+  orderDate,
+  orderDateLabel,
+  ordersInRange,
+  groupOrdersByDay,
+} from "./order-history";
 
 type OrderFilter = "all" | "active" | "completed" | "unpaid" | "paid";
 
@@ -13,12 +21,14 @@ function openedLabel(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "UTC",
   }).format(date);
 }
 
 function matchesFilter(order: OpenOrder, filter: OrderFilter) {
   if (filter === "all") return true;
-  if (filter === "active") return order.status !== "completed";
+  if (filter === "active")
+    return order.status !== "completed" && order.status !== "cancelled";
   if (filter === "completed") return order.status === "completed";
   if (filter === "unpaid") {
     return (
@@ -109,40 +119,61 @@ export function OrdersScreen({
   onOpenOrder: (order: OpenOrder) => void;
   onNewOrder: () => void;
 }) {
-  const [filter, setFilter] = useState<OrderFilter>("active");
+  const [filter, setFilter] = useState<OrderFilter>("all");
+  const today = new Date().toISOString().slice(0, 10);
+  const [period, setPeriod] = useState<"week" | "custom" | "all">("week");
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [custom, setCustom] = useState(() => orderWeek(today));
+  const range =
+    period === "all"
+      ? null
+      : period === "custom"
+        ? custom
+        : orderWeek(today, weekOffset);
+  let dateError = "",
+    periodOrders: OpenOrder[] = [];
+  try {
+    periodOrders = ordersInRange(orders, range);
+  } catch (cause) {
+    dateError = cause instanceof Error ? cause.message : "Choose valid dates.";
+  }
+  const periodIds = new Set(periodOrders.map((order) => order.id));
+  const outsideActive = orders.filter(
+    (order) => matchesFilter(order, "active") && !periodIds.has(order.id),
+  ).length;
+  const unknownDates = orders.filter(
+    (order) => !orderDate(order.openedAt),
+  ).length;
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const normalizedQuery = query.trim().toLowerCase();
-  const filteredOrders = useMemo(
-    () =>
-      orders.filter((order) => {
-        if (!matchesFilter(order, filter)) return false;
-        if (!normalizedQuery) return true;
-        const receiptNumber = order.receipt?.receiptNumber
-          ? String(order.receipt.receiptNumber)
-          : "";
-        const searchable = [
-          String(order.orderNumber),
-          order.tableName ?? "",
-          order.orderType === "takeaway" ? "takeaway" : "dine in",
-          receiptNumber,
-        ]
-          .join(" ")
-          .toLowerCase();
-        return searchable.includes(normalizedQuery);
-      }),
-    [filter, normalizedQuery, orders],
-  );
+  const filteredOrders = periodOrders.filter((order) => {
+    if (!matchesFilter(order, filter)) return false;
+    if (!normalizedQuery) return true;
+    const receiptNumber = order.receipt?.receiptNumber
+      ? String(order.receipt.receiptNumber)
+      : "";
+    const searchable = [
+      String(order.orderNumber),
+      order.tableName ?? "",
+      order.orderType === "takeaway" ? "takeaway" : "dine in",
+      receiptNumber,
+    ]
+      .join(" ")
+      .toLowerCase();
+    return searchable.includes(normalizedQuery);
+  });
   const selectedOrder =
     filteredOrders.find((order) => order.id === selectedId) ??
     filteredOrders[0];
-  const activeCount = orders.filter(
-    (order) => order.status !== "completed",
+  const groups = groupOrdersByDay(filteredOrders);
+  const activeCount = periodOrders.filter(
+    (order) => order.status !== "completed" && order.status !== "cancelled",
   ).length;
-  const completedCount = orders.filter(
+  const completedCount = periodOrders.filter(
     (order) => order.status === "completed",
   ).length;
-  const dueTotal = orders.reduce(
+  const dueTotal = filteredOrders.reduce(
     (total, order) => total + order.amountDueMinor,
     0,
   );
@@ -151,10 +182,132 @@ export function OrdersScreen({
     <div className="space-y-4">
       <PageHeader
         title="Orders"
-        description="Find active orders, check their progress, and reopen them quickly."
+        description="Browse orders by the day they were opened, and pick up where you left off."
         action={<Button onClick={onNewOrder}>New Order</Button>}
       />
 
+      <Card className="p-5 shadow-none">
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="w-44 text-sm font-medium">
+            Period
+            <Select
+              aria-label="Order period"
+              className="mt-1.5"
+              value={period}
+              onChange={(event) => {
+                const next = event.target.value as typeof period;
+                if (next === "custom") setCustom(range ?? orderWeek(today));
+                if (next === "week") setWeekOffset(0);
+                setPeriod(next);
+              }}
+            >
+              <option value="week">
+                {weekOffset === 0 ? "This week" : "Selected week"}
+              </option>
+              <option value="custom">Custom dates</option>
+              <option value="all">All dates</option>
+            </Select>
+          </label>
+          {period === "week" && (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => setWeekOffset((current) => current - 1)}
+              >
+                Previous week
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={weekOffset >= 0}
+                onClick={() => setWeekOffset((current) => current + 1)}
+              >
+                Next week
+              </Button>
+              {weekOffset !== 0 && (
+                <Button variant="ghost" onClick={() => setWeekOffset(0)}>
+                  This week
+                </Button>
+              )}
+            </div>
+          )}
+          {period === "custom" && (
+            <>
+              <label className="w-44 text-sm font-medium">
+                Start date
+                <Input
+                  aria-label="Order start date"
+                  type="date"
+                  className="mt-1.5"
+                  value={custom.start}
+                  onChange={(event) =>
+                    setCustom((current) => ({
+                      ...current,
+                      start: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label className="w-44 text-sm font-medium">
+                End date
+                <Input
+                  aria-label="Order end date"
+                  type="date"
+                  className="mt-1.5"
+                  value={custom.end}
+                  onChange={(event) =>
+                    setCustom((current) => ({
+                      ...current,
+                      end: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            </>
+          )}
+        </div>
+        {dateError ? (
+          <p role="alert" className="mt-4 text-sm text-destructive">
+            {dateError}
+          </p>
+        ) : (
+          <p aria-label="Order date range" className="mt-4 text-sm font-medium">
+            {range
+              ? `${orderDateLabel(range.start)} – ${orderDateLabel(range.end)}`
+              : "All dates"}
+            {period === "week" ? " · Monday to Sunday" : ""}
+          </p>
+        )}
+        <p className="mt-1 text-xs text-muted-foreground">
+          Based on when each order was opened. Dates and times use Ghana time
+          (UTC).
+        </p>
+      </Card>
+      {!dateError && period !== "all" && outsideActive > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-sm">
+          <p>
+            {outsideActive} active{" "}
+            {outsideActive === 1 ? "order is" : "orders are"} outside this date
+            range.
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setPeriod("all");
+              setFilter("active");
+              setQuery("");
+            }}
+          >
+            View all active orders
+          </Button>
+        </div>
+      )}
+      {unknownDates > 0 && period !== "all" && (
+        <p className="text-xs text-muted-foreground">
+          {unknownDates} {unknownDates === 1 ? "order has" : "orders have"} an
+          unknown opening date. Choose All dates to find them.
+        </p>
+      )}
       <Card className="p-3 shadow-none">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div
@@ -164,7 +317,7 @@ export function OrdersScreen({
             {(
               [
                 ["active", `Active ${activeCount}`],
-                ["all", `All ${orders.length}`],
+                ["all", `All ${periodOrders.length}`],
                 ["completed", `Completed ${completedCount}`],
                 ["unpaid", "Money due"],
                 ["paid", "Paid"],
@@ -183,7 +336,7 @@ export function OrdersScreen({
           </div>
           <div className="flex items-center gap-3">
             <div className="hidden text-right text-xs sm:block">
-              <span className="text-muted-foreground">Outstanding</span>{" "}
+              <span className="text-muted-foreground">Due in this view</span>{" "}
               <strong className="tabular-nums text-primary">
                 {formatGhs(dueTotal)}
               </strong>
@@ -217,31 +370,53 @@ export function OrdersScreen({
             <span />
           </div>
           {filteredOrders.length ? (
-            filteredOrders.map((order) => (
-              <OrderRow
-                key={order.id}
-                order={order}
-                selected={selectedOrder?.id === order.id}
-                onSelect={() => setSelectedId(order.id)}
-                onOpen={() => onOpenOrder(order)}
-              />
+            groups.map((group) => (
+              <section
+                key={group.date ?? "unknown"}
+                aria-label={
+                  group.date ? orderDateLabel(group.date) : "Unknown date"
+                }
+              >
+                <div className="flex items-center justify-between border-y bg-muted/30 px-4 py-3">
+                  <h2 className="text-sm font-semibold">
+                    {group.date
+                      ? `${group.date === today ? "Today · " : ""}${orderDateLabel(group.date)}`
+                      : "Unknown date"}
+                  </h2>
+                  <span className="text-xs text-muted-foreground">
+                    {group.orders.length}{" "}
+                    {group.orders.length === 1 ? "order" : "orders"}
+                  </span>
+                </div>
+                {group.orders.map((order) => (
+                  <OrderRow
+                    key={order.id}
+                    order={order}
+                    selected={selectedOrder?.id === order.id}
+                    onSelect={() => setSelectedId(order.id)}
+                    onOpen={() => onOpenOrder(order)}
+                  />
+                ))}
+              </section>
             ))
           ) : (
             <div className="grid min-h-56 place-items-center p-8 text-center">
               <div>
                 <p className="font-bold">
-                  {query.trim()
-                    ? "No orders match your search"
-                    : "No orders in this view"}
+                  {dateError
+                    ? "Choose a valid date range"
+                    : query.trim()
+                      ? "No orders match your search"
+                      : "No orders in this view"}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {query.trim()
-                    ? "Try an order number, table, takeaway, or receipt number."
-                    : filter === "active"
-                      ? "Start a new order to see it here."
-                      : "Try another filter to see more orders."}
+                  {dateError
+                    ? "Update the start and end dates above."
+                    : query.trim()
+                      ? "Try an order number, table, takeaway, or receipt number."
+                      : "Try another week, date range, or status filter."}
                 </p>
-                {filter === "active" && !query.trim() ? (
+                {!dateError && filter === "active" && !query.trim() ? (
                   <Button size="sm" className="mt-4" onClick={onNewOrder}>
                     Start New Order
                   </Button>
@@ -279,7 +454,20 @@ export function OrdersScreen({
                 </div>
                 <div className="flex justify-between gap-3">
                   <span className="text-muted-foreground">Opened</span>
-                  <strong>{openedLabel(selectedOrder.openedAt)}</strong>
+                  <strong className="text-right font-medium">
+                    {orderDate(selectedOrder.openedAt) ? (
+                      <>
+                        <span className="block">
+                          {orderDateLabel(orderDate(selectedOrder.openedAt)!)}
+                        </span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {openedLabel(selectedOrder.openedAt)}
+                        </span>
+                      </>
+                    ) : (
+                      "Unknown date"
+                    )}
+                  </strong>
                 </div>
                 <div className="flex justify-between gap-3">
                   <span className="text-muted-foreground">Progress</span>
