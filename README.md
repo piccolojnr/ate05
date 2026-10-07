@@ -46,6 +46,18 @@ pnpm lint
 pnpm test
 ```
 
+## Recording expenses
+
+Owners and managers can open **Expenses** to record restaurant spending in GHS.
+Each entry includes an expense date, description, category, amount, and payment
+method. The list shows the newest expense dates first and supports description
+search, category filtering, and edits. Corrections preserve the original author
+and creation time, record the latest editor, and reject stale edits.
+
+Desktop entries persist in local SQLite and are included in database backups.
+Browser preview entries use the existing local-storage preview adapter. Expense
+entries do not automatically change inventory quantities or record order payments.
+
 ## Local database development
 
 SQLite is the initial local source of truth. The database package stores GHS values as integer pesewas, UTC ISO timestamps, and application-generated string IDs. Its checked-in Drizzle migrations create business-scoped records for staff, menu, seating, orders, kitchen tickets, payments/receipts, inventory, and stock movements.

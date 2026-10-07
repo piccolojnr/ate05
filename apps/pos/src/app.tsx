@@ -1,3 +1,4 @@
+import { ExpensesScreen } from "./screens/expenses/expenses-screen";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@ate05/ui";
 import { notify } from "./lib/notifications";
@@ -852,6 +853,10 @@ export function App() {
             }
           />
         )}
+        {activeScreen === "Expenses" &&
+          session?.permissions.includes("expenses") && (
+            <ExpensesScreen key={session.id} client={client} />
+          )}
         {activeScreen === "Settings" && (
           <SettingsScreen
             printers={printers}

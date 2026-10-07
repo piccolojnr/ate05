@@ -21,7 +21,7 @@ use uuid::Uuid;
 pub const BACKUP_FORMAT_VERSION: u32 = 2;
 const PLAIN_BACKUP_FORMAT_VERSION: u32 = 3;
 const LEGACY_FORMAT_VERSION: u32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 7;
+const CURRENT_SCHEMA_VERSION: i64 = 8;
 const AUTOMATIC_RETENTION: usize = 14;
 const MAGIC: &[u8; 8] = b"ATE05BK\0";
 const SERVICE: &str = "com.ate05.pos";
@@ -30,7 +30,7 @@ const CHUNK_SIZE: usize = 1024 * 1024;
 const KDF_MEMORY_KIB: u32 = 19_456;
 const KDF_ITERATIONS: u32 = 2;
 const KDF_PARALLELISM: u32 = 1;
-const EXPECTED_TABLES: [&str; 17] = [
+const EXPECTED_TABLES: [&str; 18] = [
     "businesses",
     "users",
     "menu_categories",
@@ -48,6 +48,7 @@ const EXPECTED_TABLES: [&str; 17] = [
     "printers",
     "app_metadata",
     "print_attempts",
+    "expenses",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -274,6 +275,28 @@ async fn schema_version(pool: &SqlitePool) -> Result<i64, BackupError> {
     .await
     .map_err(|e| BackupError::InvalidDatabase(format!("migration metadata is missing ({e})")))
 }
+async fn check_required_tables(pool: &SqlitePool, version: i64) -> Result<(), BackupError> {
+    for table in EXPECTED_TABLES {
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        )
+        .bind(table)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| BackupError::InvalidDatabase(e.to_string()))?;
+        if exists.is_none()
+            && !((table == "print_attempts" && version < 4)
+                || (table == "menu_item_price_options" && version < 6)
+                || (table == "expenses" && version < 8))
+        {
+            return Err(BackupError::InvalidDatabase(format!(
+                "required table {table} is missing"
+            )));
+        }
+    }
+    Ok(())
+}
+
 async fn check_database(path: &Path) -> Result<i64, BackupError> {
     let pool = database::connect(path)
         .await
@@ -299,23 +322,7 @@ async fn check_database(path: &Path) -> Result<i64, BackupError> {
             ));
         }
         let version = schema_version(&pool).await?;
-        for table in EXPECTED_TABLES {
-            let exists: Option<i64> = sqlx::query_scalar(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-            )
-            .bind(table)
-            .fetch_optional(&pool)
-            .await
-            .map_err(|e| BackupError::InvalidDatabase(e.to_string()))?;
-            if exists.is_none()
-                && !((table == "print_attempts" && version < 4)
-                    || (table == "menu_item_price_options" && version < 6))
-            {
-                return Err(BackupError::InvalidDatabase(format!(
-                    "required table {table} is missing"
-                )));
-            }
-        }
+        check_required_tables(&pool, version).await?;
         if version > CURRENT_SCHEMA_VERSION {
             return Err(BackupError::IncompatibleSchema(
                 "backup was created by a newer ATE05 version".into(),
@@ -340,6 +347,9 @@ pub async fn health(pool: &SqlitePool) -> DatabaseHealth {
         if version > CURRENT_SCHEMA_VERSION {
             return Err("database schema is newer than this application".into());
         }
+        check_required_tables(pool, version)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(version)
     }
     .await
@@ -1303,6 +1313,53 @@ mod tests {
         sqlx::query("INSERT INTO menu_item_price_options (id, business_id, menu_item_id, name, price_minor, sort_order, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)").bind("option-1").bind("business-1").bind("item-1").bind("Large").bind(11000_i64).bind("2026-09-11T00:00:00Z").bind("2026-09-11T00:00:00Z").execute(&pool).await.unwrap();
         (db, pool)
     }
+    #[test]
+    fn schema_eight_requires_expenses_for_backup_validation_and_health() {
+        tauri::async_runtime::block_on(async {
+            let root = root();
+            let (db, pool) = fixture(&root).await;
+            assert_eq!(check_database(&db).await.unwrap(), 8);
+            assert!(health(&pool).await.healthy);
+            sqlx::query("DROP TABLE expenses")
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(matches!(
+                check_database(&db).await,
+                Err(BackupError::InvalidDatabase(message)) if message.contains("required table expenses is missing")
+            ));
+            let status = health(&pool).await;
+            assert!(!status.healthy);
+            assert!(status
+                .message
+                .contains("required table expenses is missing"));
+            pool.close().await;
+            fs::remove_dir_all(root).unwrap();
+        });
+    }
+
+    #[test]
+    fn schema_seven_without_expenses_remains_valid_and_can_be_upgraded() {
+        tauri::async_runtime::block_on(async {
+            let root = root();
+            let (db, pool) = fixture(&root).await;
+            sqlx::query("DROP TABLE expenses")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 8")
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert_eq!(check_database(&db).await.unwrap(), 7);
+            assert!(health(&pool).await.healthy);
+            pool.close().await;
+            database::migrate_path(&db).await.unwrap();
+            assert_eq!(check_database(&db).await.unwrap(), 8);
+            fs::remove_dir_all(root).unwrap();
+        });
+    }
+
     #[test]
     fn encrypted_single_file_round_trip_and_tamper_detection() {
         tauri::async_runtime::block_on(async {
