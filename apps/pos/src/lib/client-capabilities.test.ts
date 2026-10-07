@@ -6,6 +6,7 @@ import type { PosClient } from "./pos-client";
 const capabilityMethods = [
   "authBootstrap",
   "bootstrap",
+  "listRevenuePayments",
   "listMenuManagement",
   "addMenuItem",
   "recordPayment",

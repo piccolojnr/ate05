@@ -2239,6 +2239,33 @@ export function createTauriClient(): PosClient {
       }
       return updated;
     },
+    async listRevenuePayments() {
+      requirePermission("reports");
+      const db = await database();
+      const rows = await select<Row>(
+        db,
+        "SELECT p.id, p.order_id AS orderId, p.amount_minor AS amountMinor, p.method, p.status, p.received_at AS receivedAt, o.payment_status AS paymentStatus FROM payments p JOIN orders o ON o.id = p.order_id AND o.business_id = p.business_id WHERE p.business_id = $1 ORDER BY p.received_at, p.id",
+        [businessId],
+      ).catch(() => {
+        throw new PosClientError(
+          "database",
+          "Unable to load revenue payments from the local database. Please try again.",
+        );
+      });
+      return rows.map((row) => ({
+        id: asString(row.id),
+        orderId: asString(row.orderId),
+        amountMinor: asNumber(row.amountMinor),
+        method: asString(
+          row.method,
+        ) as import("@ate05/domain").RevenuePayment["method"],
+        status: asString(
+          row.status,
+        ) as import("@ate05/domain").RevenuePayment["status"],
+        receivedAt: asString(row.receivedAt),
+        orderPaid: asString(row.paymentStatus) === "paid",
+      }));
+    },
     async listReceipts() {
       const db = await database();
       const rows = await select<Row>(

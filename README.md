@@ -77,3 +77,23 @@ once Windows has installed them as printers; no network address or port is
 needed. Printing is post-commit: printer failures leave documents persisted and
 retryable. Direct USB transport and cash drawers remain deferred. See the
 [staff printer setup and troubleshooting guide](docs/printer-configuration.md).
+
+## Revenue reporting
+
+Owners and managers can open **Reports** for received revenue, payment counts,
+paid order counts, and totals by payment method and day. Periods include today,
+Monday–Sunday weeks, calendar months, and inclusive custom dates, with exact dates
+shown. Reporting uses payment `received_at` in Ghana time (UTC), rather than order
+creation, completion, or receipt printing time. Partial payments count when received;
+amounts already reflect discounts and exclude cash tendered/change. Refunded and
+voided payment records are excluded according to their current status. This is a
+received-payment report, not a historical refund-event or accrual accounting ledger.
+Paid orders means fully paid orders with at least one recorded payment in the
+selected period, counted once per order.
+
+Desktop reporting reads business-scoped payment records directly from SQLite and
+requires the `reports` permission. It needs no schema migration. The browser preview
+persists new payment dates, including split payments and retry identities. Older
+preview receipts without payment dates use receipt issue dates and display a notice;
+older partial payments that were never saved cannot be reconstructed. Production
+SQLite records already retain individual payment dates.

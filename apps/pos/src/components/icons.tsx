@@ -7,6 +7,7 @@ export type IconName =
   | "kitchen"
   | "menu"
   | "inventory"
+  | "reports"
   | "settings"
   | "search"
   | "plus"
@@ -26,6 +27,7 @@ export function Icon({
     strokeLinejoin: "round" as const,
   };
   const paths: Record<IconName, ReactElement> = {
+    reports: <path {...common} d="M4 20h16M7 16V9M12 16V4M17 16v-5" />,
     pos: (
       <>
         <path {...common} d="M4 5h16v14H4z" />

@@ -10,6 +10,7 @@ const icons: Record<NavigationItem, IconName> = {
   Kitchen: "kitchen",
   Menu: "menu",
   Inventory: "inventory",
+  Reports: "reports",
   Settings: "settings",
 };
 

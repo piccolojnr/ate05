@@ -6,3 +6,5 @@ export * from "./payments";
 export * from "./seating";
 export * from "./money";
 export * from "./shared";
+
+export * from "./revenue-reporting";
